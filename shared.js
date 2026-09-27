@@ -180,8 +180,8 @@ function saveState(state){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(s
 // load with zero setup. The Configure screen still exists as a manual
 // override (e.g. pointing at a staging project), and anything saved there
 // wins over these defaults.
-const DEFAULT_SB_URL = '';
-const DEFAULT_SB_KEY = '';
+const DEFAULT_SB_URL = 'https://supabase.com/dashboard/project/pryiiaqubqdrcavxszax';
+const DEFAULT_SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InByeWlpYXF1YnFkcmNhdnhzemF4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA0OTk1OTAsImV4cCI6MjEwNjA3NTU5MH0.EZT17S4XIo9-T9afJ7kNOpoaqhY-uTcfQQXTj9BvFIk';
 function loadCfg(){
   try{ const r = localStorage.getItem(CFG_KEY); if(r) return JSON.parse(r); }catch(e){}
   return {url:DEFAULT_SB_URL, key:DEFAULT_SB_KEY};
