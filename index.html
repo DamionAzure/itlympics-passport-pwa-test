@@ -77,7 +77,6 @@
     </div>
     <div class="status-bar">
       <div id="cloudLabel">Cloud backend: not configured</div>
-      <button class="btn-ghost" style="padding:6px 12px;font-size:12px;" onclick="openSettings()">Configure</button>
     </div>
 
     <div class="card">
@@ -111,21 +110,6 @@
     <img id="snapPreview" style="display:none;width:100%;border-radius:8px;margin-bottom:12px;border:1px solid var(--line);" alt="Last captured frame — check this for focus/framing if decoding keeps failing">
     <p class="demo-note" id="snapNote" style="display:none;">This is exactly what the scanner tried to read. If it looks blurry or too small here, that's a focus/distance problem, not a bug — back up a little or steady the phone.</p>
 
-  </div>
-
-  <div class="modal" id="settingsModal">
-    <div class="modal-card">
-      <h3 style="margin-top:0;">Cloud backend (Supabase)</h3>
-      <label for="sbUrl">Project URL</label>
-      <input type="text" id="sbUrl" placeholder="https://xxxx.supabase.co">
-      <label for="sbKey">Anon public key</label>
-      <input type="text" id="sbKey" placeholder="eyJ...">
-      <p class="demo-note">Leave blank to stay local-only. See the Testing page and chat for the SQL schema to run once in the Supabase SQL editor.</p>
-      <div class="row">
-        <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
-        <button class="btn-primary" onclick="saveSettings()">Save</button>
-      </div>
-    </div>
   </div>
 
   <div class="modal" id="qrModal" onclick="closeBadgeQr()">
@@ -163,12 +147,6 @@ function renderCloudStatus(){
   const el = document.getElementById('cloudLabel');
   if(el) el.textContent = sb ? 'Cloud backend: connected' : 'Cloud backend: not configured';
 }
-function openSettings(){
-  document.getElementById('sbUrl').value = cfg.url;
-  document.getElementById('sbKey').value = cfg.key;
-  document.getElementById('settingsModal').style.display='flex';
-}
-function closeSettings(){ document.getElementById('settingsModal').style.display='none'; }
 
 // ---- enlarged badge QR (tap the small badge to fill most of the screen —
 // easier for gate staff to scan than the small inline one) ----
@@ -189,13 +167,6 @@ function openBadgeQr(){
   document.getElementById('qrModal').style.display='flex';
 }
 function closeBadgeQr(){ document.getElementById('qrModal').style.display='none'; }
-function saveSettings(){
-  cfg.url = document.getElementById('sbUrl').value.trim();
-  cfg.key = document.getElementById('sbKey').value.trim();
-  saveCfg(cfg); initSb(); closeSettings();
-  showToast(sb ? 'Connected to Supabase' : 'Cloud not configured — staying local-only');
-  if(sb) pullFromCloud();
-}
 async function pullFromCloud(){
   if(!sb || !state.studentId) return;
   try{
