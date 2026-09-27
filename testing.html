@@ -150,7 +150,7 @@ begin
   if v_secret is null then return null; end if;
   v_window_id := floor(extract(epoch from now()) / p_rotation_seconds);
   return 'BOOTH:' || p_booth_id || ':' || v_window_id || ':' ||
-    substring(encode(hmac(p_booth_id || ':' || v_window_id::text, v_secret, 'sha256'), 'hex') from 1 for 10);
+    substring(encode(hmac((p_booth_id || ':' || v_window_id::text)::bytea, v_secret::bytea, 'sha256'), 'hex') from 1 for 10);
 end;
 $$;
 
@@ -191,7 +191,7 @@ begin
   else
     return query select false, v_booth_id, false, 'Expired code (outside sync window)'; return;
   end if;
-  v_expected := substring(encode(hmac(v_booth_id || ':' || v_window_id::text, v_secret, 'sha256'), 'hex') from 1 for 10);
+  v_expected := substring(encode(hmac((v_booth_id || ':' || v_window_id::text)::bytea, v_secret::bytea, 'sha256'), 'hex') from 1 for 10);
   if v_expected <> v_code then
     return query select false, v_booth_id, false, 'Invalid code (signature mismatch)'; return;
   end if;
