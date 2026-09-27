@@ -141,7 +141,7 @@ insert into booth_secrets (booth_id, secret) values
 
 create or replace function generate_booth_code(p_booth_id text, p_rotation_seconds int default 30)
 returns text
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 declare
   v_secret text;
   v_window_id bigint;
@@ -156,7 +156,7 @@ $$;
 
 create or replace function validate_booth_code(p_code text, p_rotation_seconds int default 30)
 returns table(ok boolean, booth_id text, not_sure boolean, reason text)
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 declare
   v_parts text[];
   v_booth_id text; v_window_id bigint; v_code text; v_secret text;
@@ -177,7 +177,7 @@ begin
   if v_window_id is null then
     return query select false, null::text, false, 'Malformed code'; return;
   end if;
-  select secret into v_secret from booth_secrets where booth_id = v_booth_id;
+  select secret into v_secret from booth_secrets where booth_secrets.booth_id = v_booth_id;
   if v_secret is null then
     return query select false, null::text, false, 'Unknown booth'; return;
   end if;
