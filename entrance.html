@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F3A5F">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>ITLympics Entrance Check-in</title>
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="vendor/jsQR.js"></script>
+<style>
+  .scan-area{background:#000;border-radius:12px;overflow:hidden;position:relative;margin-bottom:12px;display:none;}
+  .scan-area.active{display:block;}
+  video{width:100%;display:block;}
+  .scan-frame{position:absolute;inset:20%;border:2px solid var(--amber);border-radius:8px;pointer-events:none;}
+  .checkin-row{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px;}
+  .checkin-row:last-child{border-bottom:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <p class="eyebrow">ITLympics 2027 — Staff</p>
+      <h1 class="stamp-font">Entrance Check-in</h1>
+    </div>
+  </header>
+  <nav class="pagenav">
+    <a href="index.html">Passport</a>
+    <a href="booth.html">QR Booth</a>
+    <a href="skills.html">Skills Reg</a>
+    <a href="entrance.html" class="active">Entrance</a>
+    <a href="vote.html">Vote</a>
+    <a href="testing.html">Testing</a>
+  </nav>
+
+  <div class="status-bar">
+    <div><span class="dot" id="netDot"></span><span id="netLabel">Venue wifi: checking...</span></div>
+  </div>
+
+  <div class="card">
+    <p style="font-size:13px;color:var(--text-muted);margin-top:0;">Scan an attendee's Passport badge QR at the gate. Works offline — a check-in scanned without wifi is queued and confirmed against the cloud once connected, so a duplicate from another gate still gets caught, just a little later.</p>
+    <button class="btn-primary" id="scanBtn" onclick="toggleScanner()">Scan attendee badge</button>
+    <div class="scan-area" id="scanArea">
+      <video id="video" playsinline muted></video>
+      <div class="scan-frame"></div>
+    </div>
+    <div id="scanDebug" style="font-size:11px;font-family:monospace;color:var(--text-muted);text-align:center;margin:-6px 0 12px;"></div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0;font-size:14px;">Recent check-ins <span id="checkinCount" style="color:var(--text-muted);font-weight:400;"></span></h3>
+    <div id="checkinFeed" style="max-height:260px;overflow-y:auto;"></div>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="shared.js"></script>
+<script>
+let state = loadState(), cfg = loadCfg(), sb = null;
+let videoStream=null, scanning=false, rafId=null;
+const ENTRANCE_QUEUE_KEY = 'itlympics_entrance_queue_v1';
+
+// Local, running record of who's been checked in — seeded from the cloud on
+// connect, then kept current by both this device's own scans and Realtime
+// events from every other entrance station. This is what makes duplicate
+// detection work across multiple gates instead of just on one phone.
+const checkedIn = new Map(); // student_id -> {name, ts}
+
+function loadQueue(){ try{ const r=localStorage.getItem(ENTRANCE_QUEUE_KEY); if(r) return JSON.parse(r); }catch(e){} return []; }
+function saveQueue(q){ try{ localStorage.setItem(ENTRANCE_QUEUE_KEY, JSON.stringify(q)); }catch(e){} }
+
+function showToast(msg, warn){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  t.classList.toggle('warn', !!warn);
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(()=>t.classList.remove('show'), warn ? 3600 : 2400);
+}
+function renderNetStatus(){
+  const dot=document.getElementById('netDot'), label=document.getElementById('netLabel');
+  dot.className='dot '+(state.online?'on':'off');
+  const q = loadQueue().length;
+  label.textContent = state.online
+    ? (q ? `Venue wifi: online, confirming ${q} queued...` : 'Venue wifi: online')
+    : `Venue wifi: offline${q?' — '+q+' queued':''}`;
+}
+function setScanDebug(msg){ const el=document.getElementById('scanDebug'); if(el) el.textContent = msg; }
+
+function renderFeed(){
+  const feed = document.getElementById('checkinFeed'), count = document.getElementById('checkinCount');
+  const entries = Array.from(checkedIn.entries()).sort((a,b)=>b[1].ts-a[1].ts);
+  count.textContent = `(${entries.length})`;
+  feed.innerHTML = entries.length ? '' : '<div style="font-size:12px;color:var(--text-muted);">No check-ins yet.</div>';
+  entries.slice(0,100).forEach(([id, info])=>{
+    const row = document.createElement('div');
+    row.className='checkin-row';
+    row.innerHTML = `<span>${info.name||id}</span><span>${new Date(info.ts).toLocaleTimeString()}</span>`;
+    feed.appendChild(row);
+  });
+}
+
+// ---- handling a scanned badge ----
+async function handleEntranceScan(text){
+  if(!text || !text.startsWith('STUDENT:')){ showToast('Not an attendee badge QR'); return; }
+  const studentId = text.slice('STUDENT:'.length);
+
+  if(checkedIn.has(studentId)){
+    addFlag({studentId, boothId:null, boothName:'Entrance gate', reason:'Duplicate check-in attempt', raw:text}, sb);
+    showToast(`⚠️ Already checked in at ${new Date(checkedIn.get(studentId).ts).toLocaleTimeString()} — flagged`, true);
+    return;
+  }
+
+  checkedIn.set(studentId, {name:null, ts:Date.now()});
+  renderFeed();
+  showToast(`Checked in: ${studentId}`);
+
+  if(sb && state.online){
+    try{
+      const {error} = await sb.from('checkins').insert({student_id: studentId});
+      if(error){
+        if(error.code === '23505'){ // unique_violation — someone else's device already checked this ID in
+          addFlag({studentId, boothId:null, boothName:'Entrance gate', reason:'Duplicate check-in (already in cloud)', raw:text}, sb);
+          showToast('⚠️ Already checked in elsewhere — flagged', true);
+        } else throw error;
+      }
+    }catch(e){
+      const q = loadQueue(); q.push(studentId); saveQueue(q); renderNetStatus();
+    }
+  } else {
+    const q = loadQueue(); q.push(studentId); saveQueue(q); renderNetStatus();
+  }
+}
+
+async function flushQueue(){
+  if(!sb || !state.online) return;
+  flushPendingFlags(sb);
+  const q = loadQueue(); if(!q.length) return;
+  const remaining = [];
+  for(const studentId of q){
+    try{
+      const {error} = await sb.from('checkins').insert({student_id: studentId});
+      if(error && error.code === '23505'){
+        addFlag({studentId, boothId:null, boothName:'Entrance gate', reason:'Duplicate check-in (confirmed on sync)', raw:'STUDENT:'+studentId}, sb);
+      } else if(error){ remaining.push(studentId); }
+    }catch(e){ remaining.push(studentId); }
+  }
+  saveQueue(remaining); renderNetStatus();
+  if(q.length !== remaining.length) showToast('Queued check-ins confirmed with cloud');
+}
+
+// ---- cloud seed + realtime (multi-gate duplicate detection) ----
+async function initCheckins(){
+  if(!sb) return;
+  try{
+    const {data} = await sb.from('checkins').select('student_id, checked_in_at');
+    (data||[]).forEach(r=>checkedIn.set(r.student_id, {name:null, ts:new Date(r.checked_in_at).getTime()||Date.now()}));
+    renderFeed();
+  }catch(e){}
+  subscribeTable(sb, 'checkins', (payload)=>{
+    const r = payload.new; if(!r) return;
+    if(!checkedIn.has(r.student_id)){ checkedIn.set(r.student_id, {name:null, ts:Date.now()}); renderFeed(); }
+  });
+  flushQueue();
+}
+function initSb(){ sb = initSupabase(cfg); initCheckins(); }
+
+// ---- camera scanning (same approach as the booth scanner) ----
+function toggleScanner(){ if(scanning) stopScanner(); else startScanner(); }
+async function startScanner(){
+  const area=document.getElementById('scanArea'), btn=document.getElementById('scanBtn');
+  try{
+    videoStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+  }catch(e){
+    showToast('Camera unavailable — check camera permission');
+    return;
+  }
+  const video=document.getElementById('video');
+  video.muted = true; video.playsInline = true; video.srcObject = videoStream;
+  try{ await video.play(); }
+  catch(e){
+    showToast('Could not start camera preview — tap Scan again');
+    videoStream.getTracks().forEach(t=>t.stop()); videoStream=null; return;
+  }
+  area.classList.add('active'); btn.textContent='Stop scanning'; scanning=true; scanLoop();
+}
+function stopScanner(){
+  scanning=false;
+  if(rafId){ cancelAnimationFrame(rafId); rafId=null; }
+  if(videoStream){ videoStream.getTracks().forEach(t=>t.stop()); videoStream=null; }
+  document.getElementById('video').srcObject=null;
+  document.getElementById('scanArea').classList.remove('active');
+  document.getElementById('scanBtn').textContent='Scan attendee badge';
+  setScanDebug('');
+}
+function scanLoop(){
+  if(!scanning) return;
+  try{
+    const video=document.getElementById('video');
+    if(video.videoWidth && video.videoHeight){
+      const canvas = scanLoop._canvas || (scanLoop._canvas=document.createElement('canvas'));
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d', {willReadFrequently:true}) || canvas.getContext('2d');
+      ctx.drawImage(video,0,0,canvas.width,canvas.height);
+      const img=ctx.getImageData(0,0,canvas.width,canvas.height);
+      const code=jsQR(img.data,img.width,img.height);
+      scanLoop._frames = (scanLoop._frames||0)+1;
+      setScanDebug(`scanning… frame ${scanLoop._frames} (${canvas.width}×${canvas.height})`);
+      if(code && code.data){ stopScanner(); handleEntranceScan(code.data); return; }
+    } else {
+      setScanDebug('waiting for camera frame…');
+    }
+  }catch(e){ setScanDebug('scan error: '+e.message); }
+  rafId = requestAnimationFrame(scanLoop);
+}
+
+// ---- init ----
+renderNetStatus(); renderFeed(); initSb();
+window.addEventListener('online', ()=>{ state.online=true; saveState(state); renderNetStatus(); flushQueue(); });
+window.addEventListener('offline', ()=>{ state.online=false; saveState(state); renderNetStatus(); });
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('service-worker.js').catch(e=>console.warn('SW registration failed', e)); }
+</script>
+</body>
+</html>

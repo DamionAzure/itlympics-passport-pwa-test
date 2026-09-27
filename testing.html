@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F3A5F">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>ITLympics Testing Suite</title>
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <p class="eyebrow">ITLympics 2027</p>
+      <h1 class="stamp-font">Testing Suite</h1>
+    </div>
+  </header>
+  <nav class="pagenav">
+    <a href="index.html">Passport</a>
+    <a href="booth.html">QR Booth</a>
+    <a href="skills.html">Skills Reg</a>
+    <a href="entrance.html">Entrance</a>
+    <a href="vote.html">Vote</a>
+    <a href="testing.html" class="active">Testing</a>
+  </nav>
+
+  <div class="status-bar">
+    <div><span class="dot" id="netDot"></span><span id="netLabel">Venue wifi: checking...</span></div>
+    <div class="toggle" id="netToggle" onclick="toggleNet()"><div class="knob"></div></div>
+  </div>
+  <div class="status-bar">
+    <div id="cloudLabel">Cloud backend: not configured</div>
+    <button class="btn-ghost" style="padding:6px 12px;font-size:12px;" onclick="openSettings()">Configure</button>
+  </div>
+
+  <div class="card">
+    <div style="font-size:12px;color:var(--text-muted);">Testing against the passport registered on this device</div>
+    <div id="whoLabel" style="font-size:15px;font-weight:500;margin-top:4px;">No one registered on this device yet</div>
+    <div id="progressLabel" style="font-size:13px;color:var(--text-muted);margin-top:2px;"></div>
+  </div>
+
+  <div class="demo-section">
+    <h3>Scan a booth (no camera needed)</h3>
+    <p class="demo-note">Generates a real, currently-valid code for that booth — using the same rotation interval set on the QR Booth page — and runs it through the same validation the camera path uses.</p>
+    <div class="demo-booths" id="demoBooths"></div>
+  </div>
+
+  <div class="demo-section" id="replayBox" style="display:none;">
+    <h3>Replay test</h3>
+    <p class="demo-note">Reuse the last code you scanned — proves a screenshotted code goes stale once its time window passes.</p>
+    <div style="font-size:11px;font-family:monospace;word-break:break-all;color:var(--text-muted);margin-bottom:8px;" id="replayRaw"></div>
+    <button class="btn-ghost" onclick="replayLastCode()">Replay last code now</button>
+  </div>
+
+  <div class="demo-section">
+    <h3>Clock drift test</h3>
+    <p class="demo-note">Simulates this device's clock being off from real time, to test the scan window. A code is valid for its full rotation window, plus up to 5s of backward-only grace right after it rolls over — never early. With the default 30s rotation that's an effective ~35s window. This is a session-only setting for this page — it isn't saved.</p>
+    <input type="range" id="driftSlider" min="-90" max="90" value="0" oninput="onDriftChange()" style="width:100%;">
+    <div style="font-size:12px;color:var(--text-muted);" id="driftLabel">Simulated clock drift: 0s</div>
+  </div>
+
+  <div class="demo-section">
+    <h3>Other tests</h3>
+    <div class="row">
+      <button class="btn-ghost" onclick="forceSync()">Force sync now</button>
+      <button class="btn-ghost" onclick="recoverFromCloud()">Simulate lost phone</button>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <button class="btn-ghost" onclick="fullReset()">Full reset</button>
+    </div>
+  </div>
+
+  <div class="demo-section">
+    <h3>Live skills registrations</h3>
+    <p class="demo-note">Updates in real time via Supabase Realtime as people register on any device — no polling, no Pusher needed. Needs Replication enabled on <code>skills_registrations</code> in the Supabase dashboard.</p>
+    <div id="liveCounts" style="font-size:12px;color:var(--text-muted);margin-bottom:8px;"></div>
+    <div id="liveFeed" style="max-height:220px;overflow-y:auto;font-family:monospace;font-size:11px;color:var(--text-muted);background:var(--paper-card);border:1px solid var(--line);border-radius:8px;padding:8px;"></div>
+  </div>
+
+  <div class="demo-section">
+    <h3>Flagged attempts</h3>
+    <p class="demo-note">Expired or forged codes and duplicate check-ins — seeded from local storage so it's here even offline, then merged with every device's flags from the <code>flagged_scans</code> table (updates live via Realtime, needs Replication enabled). Each row shows when <em>this device saw it</em> (Scanned) and when the cloud confirmed the write (Received) — a row still saying "Received —" hasn't synced yet.</p>
+    <div id="flagList" style="max-height:220px;overflow-y:auto;font-family:monospace;font-size:11px;color:var(--text-muted);background:var(--paper-card);border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;"></div>
+    <button class="btn-ghost" onclick="renderFlags(); log('Flagged attempts refreshed')">Refresh</button>
+    <button class="btn-ghost" onclick="clearFlags(); renderFlags(); log('Flagged attempts cleared (local cache only — cloud copy stays)')">Clear</button>
+  </div>
+
+  <div class="demo-section">
+    <h3>Event log</h3>
+    <div id="eventLog" style="max-height:220px;overflow-y:auto;font-family:monospace;font-size:11px;color:var(--text-muted);background:var(--paper-card);border:1px solid var(--line);border-radius:8px;padding:8px;"></div>
+  </div>
+
+</div>
+
+<div class="modal" id="settingsModal">
+  <div class="modal-card">
+    <h3 style="margin-top:0;">Cloud backend (Supabase)</h3>
+    <label for="sbUrl">Project URL</label>
+    <input type="text" id="sbUrl" placeholder="https://xxxx.supabase.co">
+    <label for="sbKey">Anon public key</label>
+    <input type="text" id="sbKey" placeholder="eyJ...">
+    <p class="demo-note">Leave blank to stay local-only. Run the following once in the Supabase SQL editor to create the tables this app expects (received_at defaults to now() on insert/upsert — that's the timestamp the "Received At" fields read back):</p>
+    <pre style="font-size:10px;overflow-x:auto;background:var(--paper);padding:8px;border-radius:6px;">create table students (student_id text primary key, name text);
+create table stamps (
+  student_id text, booth_id text,
+  received_at timestamptz not null default now(),
+  primary key (student_id, booth_id)
+);
+create table flagged_scans (
+  id bigint generated always as identity primary key,
+  student_id text, booth_id text, booth_name text, reason text, raw text,
+  received_at timestamptz not null default now()
+);
+-- If stamps already exists without received_at:
+-- alter table stamps add column received_at timestamptz not null default now();</pre>
+    <div class="row">
+      <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="shared.js"></script>
+<script>
+let state = loadState(), cfg = loadCfg(), sb = null;
+let driftSeconds=0, lastScannedCode=null;
+
+function showToast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(()=>t.classList.remove('show'), 2400);
+}
+function log(msg){
+  const el = document.getElementById('eventLog'); if(!el) return;
+  const row = document.createElement('div');
+  row.className='log-row';
+  row.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  el.prepend(row);
+  while(el.children.length>40) el.removeChild(el.lastChild);
+}
+
+// Flags raised on *other* devices — seeded from `flagged_scans` on connect,
+// kept current via Realtime. Merged with this device's own local flags at
+// render time so Testing shows every flag venue-wide, not just this phone's.
+const cloudFlags = []; // {cloudId, studentId, boothName, reason, raw, receivedAt}
+function renderFlags(){
+  const el = document.getElementById('flagList'); if(!el) return;
+  const local = loadFlags();
+  const localCloudIds = new Set(local.filter(f=>f.cloudId).map(f=>f.cloudId));
+  const foreign = cloudFlags.filter(f=>!localCloudIds.has(f.cloudId));
+  const merged = local.concat(foreign).sort((a,b)=>(b.receivedAt||b.ts||0)-(a.receivedAt||a.ts||0));
+  el.innerHTML = merged.length ? '' : 'No flagged attempts yet.';
+  merged.forEach(f=>{
+    const row = document.createElement('div');
+    row.className='log-row';
+    const scanned = f.scannedAt || f.ts;
+    const scannedTxt = scanned ? `Scanned ${new Date(scanned).toLocaleTimeString()}` : 'Scanned —';
+    const receivedTxt = f.receivedAt ? `Received ${new Date(f.receivedAt).toLocaleTimeString()}` : 'Received —';
+    row.textContent = `[${scannedTxt} · ${receivedTxt}] ${f.studentId||'unknown'} @ ${f.boothName} — ${f.reason}`;
+    el.appendChild(row);
+  });
+}
+async function initFlags(){
+  if(!sb) return;
+  try{
+    const {data} = await sb.from('flagged_scans').select('id, student_id, booth_id, booth_name, reason, raw, received_at');
+    cloudFlags.length = 0;
+    (data||[]).forEach(r=>cloudFlags.push({
+      cloudId: r.id, studentId: r.student_id, boothId: r.booth_id, boothName: r.booth_name,
+      reason: r.reason, raw: r.raw, receivedAt: r.received_at ? new Date(r.received_at).getTime() : null,
+    }));
+    renderFlags();
+  }catch(e){}
+  subscribeTable(sb, 'flagged_scans', (payload)=>{
+    const r = payload.new; if(!r) return;
+    if(cloudFlags.some(f=>f.cloudId===r.id)) return;
+    cloudFlags.unshift({
+      cloudId: r.id, studentId: r.student_id, boothId: r.booth_id, boothName: r.booth_name,
+      reason: r.reason, raw: r.raw, receivedAt: r.received_at ? new Date(r.received_at).getTime() : Date.now(),
+    });
+    renderFlags();
+    log(`Live flag: ${r.student_id||'unknown'} @ ${r.booth_name} — ${r.reason}`);
+  });
+}
+
+function renderWho(){
+  document.getElementById('whoLabel').textContent = state.name ? `${state.name} (${state.studentId})` : 'No one registered on this device yet';
+  const count = Object.keys(state.stamps).length;
+  document.getElementById('progressLabel').textContent = state.name ? `${count} of ${BOOTHS.length} booths stamped` : '';
+}
+
+function renderNetStatus(){
+  const dot=document.getElementById('netDot'), label=document.getElementById('netLabel'), toggle=document.getElementById('netToggle');
+  dot.className='dot '+(state.online?'on':'off');
+  toggle.className='toggle'+(state.online?' on':'');
+  const pending = state.pendingSync.length;
+  label.textContent = state.online
+    ? (pending ? `Venue wifi: online, syncing ${pending}...` : 'Venue wifi: online, all synced')
+    : `Venue wifi: offline${pending?' — '+pending+' queued':''}`;
+}
+function toggleNet(){
+  state.online = !state.online; saveState(state); renderNetStatus();
+  log(state.online ? 'Network: online' : 'Network: offline (simulated)');
+  if(state.online) maybeSync(); else showToast('Venue wifi off — stamps keep working locally');
+}
+
+// ---- Supabase (cloud backend) ----
+function initSb(){ sb = initSupabase(cfg); renderCloudStatus(); initLiveRegs(); initFlags(); }
+
+// ---- live skills registrations feed ----
+const liveRegs = []; // {studentId, name, section, ts} — most recent first, in-memory for this session
+function courseOf(section){ return (section||'').split(' ')[0] || 'Unknown'; }
+function renderLiveRegs(){
+  const feed = document.getElementById('liveFeed'), counts = document.getElementById('liveCounts');
+  if(!feed || !counts) return;
+  feed.innerHTML = liveRegs.length ? '' : 'No registrations yet this session.';
+  liveRegs.slice(0,50).forEach(r=>{
+    const row = document.createElement('div');
+    row.className='log-row';
+    row.textContent = `[${new Date(r.ts).toLocaleTimeString()}] ${r.name} (${r.studentId}) — ${r.section}`;
+    feed.appendChild(row);
+  });
+  const byCourse = {};
+  liveRegs.forEach(r=>{ const c=courseOf(r.section); byCourse[c]=(byCourse[c]||0)+1; });
+  counts.textContent = Object.keys(byCourse).length
+    ? Object.entries(byCourse).map(([c,n])=>`${c}: ${n}`).join('  ·  ')
+    : 'No registrations counted yet.';
+}
+async function initLiveRegs(){
+  if(!sb) return;
+  // Seed with what's already in the table, then keep it live from there.
+  try{
+    const {data} = await sb.from('skills_registrations').select('student_id,name,section');
+    (data||[]).forEach(r=>liveRegs.push({studentId:r.student_id, name:r.name, section:r.section, ts:Date.now()}));
+    renderLiveRegs();
+  }catch(e){}
+  subscribeTable(sb, 'skills_registrations', (payload)=>{
+    const r = payload.new;
+    if(!r) return;
+    liveRegs.unshift({studentId:r.student_id, name:r.name, section:r.section, ts:Date.now()});
+    renderLiveRegs();
+    log(`Live: ${r.name} registered — ${r.section}`);
+  });
+}
+function renderCloudStatus(){
+  const el = document.getElementById('cloudLabel');
+  if(el) el.textContent = sb ? 'Cloud backend: connected' : 'Cloud backend: not configured';
+}
+function openSettings(){
+  document.getElementById('sbUrl').value = cfg.url;
+  document.getElementById('sbKey').value = cfg.key;
+  document.getElementById('settingsModal').style.display='flex';
+}
+function closeSettings(){ document.getElementById('settingsModal').style.display='none'; }
+function saveSettings(){
+  cfg.url = document.getElementById('sbUrl').value.trim();
+  cfg.key = document.getElementById('sbKey').value.trim();
+  saveCfg(cfg); initSb(); closeSettings();
+  showToast(sb ? 'Connected to Supabase' : 'Cloud not configured — staying local-only');
+  log(sb ? 'Cloud backend connected' : 'Cloud backend cleared');
+  if(sb) pullFromCloud();
+}
+async function pullFromCloud(){
+  if(!sb || !state.studentId) return;
+  try{
+    const {data, error} = await sb.from('stamps').select('booth_id, received_at').eq('student_id', state.studentId);
+    if(error) throw error;
+    (data||[]).forEach(row=>{
+      const existing = state.stamps[row.booth_id];
+      state.stamps[row.booth_id] = existing || {scannedAt: Date.now(), receivedAt: null, notSure:false};
+      if(row.received_at) state.stamps[row.booth_id].receivedAt = new Date(row.received_at).getTime();
+    });
+    saveState(state); renderWho();
+    log(`Pulled ${(data||[]).length} stamp(s) from cloud`);
+  }catch(e){ log('Cloud pull failed: '+e.message); }
+}
+async function pushOne(boothId){
+  if(!sb) return false;
+  try{
+    const {data, error} = await sb.from('stamps').upsert({student_id: state.studentId, booth_id: boothId}).select('received_at').single();
+    if(error) throw error;
+    if(state.stamps[boothId]) state.stamps[boothId].receivedAt = (data && data.received_at) ? new Date(data.received_at).getTime() : Date.now();
+    return true;
+  }catch(e){ log('Cloud write failed: '+e.message); return false; }
+}
+async function maybeSync(){
+  renderNetStatus();
+  if(!state.online || state.pendingSync.length===0 || !sb){ if(state.online && sb) flushPendingFlags(sb).then(renderFlags); return; }
+  for(const boothId of state.pendingSync.slice()){
+    if(await pushOne(boothId)){ state.pendingSync = state.pendingSync.filter(id=>id!==boothId); saveState(state); log(`Synced stamp: ${boothId}`); }
+  }
+  await flushPendingFlags(sb); renderFlags();
+  renderNetStatus(); renderWho();
+  if(state.pendingSync.length===0) showToast('All stamps synced to cloud');
+}
+function forceSync(){ log('Manual sync triggered'); maybeSync(); }
+
+// ---- reset / recovery ----
+function recoverFromCloud(){
+  if(!confirm('This clears local stamps and re-pulls from the cloud. Continue?')) return;
+  state.stamps = {}; state.pendingSync = []; saveState(state);
+  log('Simulated lost phone — local stamps cleared');
+  if(sb) pullFromCloud(); else showToast('No cloud configured — nothing to recover from');
+  renderWho();
+}
+function fullReset(){
+  if(!confirm('This wipes registration and local stamps on this device. Continue?')) return;
+  state = {name:null, studentId:null, stamps:{}, pendingSync:[], online:true};
+  saveState(state); log('Full local reset');
+  renderWho();
+  showToast('Local passport data cleared — open the Passport page to re-register');
+}
+
+// ---- simulated scans ----
+function renderDemoButtons(){
+  const demo = document.getElementById('demoBooths'); demo.innerHTML='';
+  BOOTHS.forEach(b=>{
+    const btn=document.createElement('button');
+    btn.className='demo-booth-btn'; btn.textContent=b.name;
+    btn.onclick=()=>simulateScan(b.id, b.name);
+    demo.appendChild(btn);
+  });
+}
+async function handleScannedText(text){
+  lastScannedCode = text;
+  document.getElementById('replayBox').style.display='block';
+  document.getElementById('replayRaw').textContent = text;
+  const result = await validateCode(text, loadRotation(), driftSeconds);
+  if(result.ok){ addStamp(result.booth.id, result.booth.name, result.notSure); }
+  else {
+    showToast('Scan rejected: '+result.reason);
+    log('Scan rejected: '+result.reason);
+    if(result.reason.startsWith('Expired code') || result.reason.startsWith('Invalid code')){
+      addFlag({studentId: state.studentId, boothId: result.booth?.id||null, boothName: result.booth?.name||'Unknown', reason: result.reason, raw: text}, sb);
+      renderFlags();
+    }
+  }
+}
+async function replayLastCode(){
+  if(!lastScannedCode) return;
+  log('Replaying captured code...');
+  const result = await validateCode(lastScannedCode, loadRotation(), driftSeconds);
+  if(result.ok){
+    showToast(result.notSure ? 'Replay accepted — not sure (grace period)' : 'Replay accepted (still within window)', !!result.notSure);
+    log(result.notSure ? 'Replay accepted — flagged not-sure (grace period)' : 'Replay accepted');
+    addStamp(result.booth.id, result.booth.name, result.notSure);
+  } else {
+    showToast('Replay blocked: '+result.reason);
+    log('Replay blocked: '+result.reason);
+  }
+}
+async function simulateScan(boothId, boothName){
+  const rotationSeconds = loadRotation();
+  const windowId = currentWindow(rotationSeconds);
+  const code = await codeForBooth(boothId, windowId);
+  await handleScannedText(`BOOTH:${boothId}:${windowId}:${code}`);
+}
+function onDriftChange(){
+  driftSeconds = parseInt(document.getElementById('driftSlider').value)||0;
+  document.getElementById('driftLabel').textContent = `Simulated clock drift: ${driftSeconds>=0?'+':''}${driftSeconds}s`;
+}
+
+function addStamp(boothId, boothName, notSure){
+  if(!state.name){ showToast('Register on the Passport page first'); log('Ignored stamp — no one registered on this device'); return; }
+  if(state.stamps[boothId]){ log(`Ignored duplicate stamp for ${boothName}`); return; }
+  state.stamps[boothId] = {scannedAt: Date.now(), receivedAt: null, notSure: !!notSure};
+  state.pendingSync.push(boothId);
+  saveState(state); renderWho();
+  showToast((notSure ? '⏳ Not sure — grace period stamp: ' : 'Stamp added: ')+boothName + (state.online && sb ? '' : ' (queued)'), !!notSure);
+  log(`Stamp added: ${boothName}` + (notSure ? ' (not sure — grace period)' : ''));
+  maybeSync();
+}
+
+// ---- init ----
+initSb();
+renderWho(); renderNetStatus(); renderDemoButtons(); renderFlags(); renderLiveRegs();
+window.addEventListener('online', ()=>{ if(!state.online){ state.online=true; saveState(state); renderNetStatus(); maybeSync(); } });
+window.addEventListener('offline', ()=>{ if(state.online){ state.online=false; saveState(state); renderNetStatus(); } });
+</script>
+</body>
+</html>

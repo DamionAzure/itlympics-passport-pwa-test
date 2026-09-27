@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F3A5F">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>ITLympics Skills Registration</title>
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <p class="eyebrow">ITLympics 2027</p>
+      <h1 class="stamp-font">Skills Registration</h1>
+    </div>
+  </header>
+  <nav class="pagenav">
+    <a href="index.html">Passport</a>
+    <a href="booth.html">QR Booth</a>
+    <a href="skills.html" class="active">Skills Reg</a>
+    <a href="entrance.html">Entrance</a>
+    <a href="vote.html">Vote</a>
+    <a href="testing.html">Testing</a>
+  </nav>
+
+  <div class="status-bar">
+    <div><span class="dot" id="netDot"></span><span id="netLabel">Venue wifi: checking...</span></div>
+  </div>
+
+  <div id="formView" class="card">
+    <p style="font-size:13px;color:var(--text-muted);margin-top:0;">Register for a Skills event. Student ID doubles as your passport ID — if you've already registered on the Passport page, it's pre-filled below.</p>
+
+    <label for="skName">Full name</label>
+    <input type="text" id="skName" placeholder="Juan Dela Cruz">
+
+    <label for="skId">Student ID</label>
+    <input type="text" id="skId" placeholder="23-0123">
+
+    <label for="skSection">Section</label>
+    <div class="combobox">
+      <input type="text" id="skSection" placeholder="Type to search, e.g. BSIT" autocomplete="off">
+      <div class="combobox-list" id="skSectionList"></div>
+    </div>
+
+    <p class="err" id="skErr" style="display:none;"></p>
+    <button class="btn-primary" onclick="submitSkillsReg()">Register for Skills event</button>
+  </div>
+
+  <div id="doneView" class="card" style="display:none;">
+    <h3 style="margin-top:0;">You're registered!</h3>
+    <p style="font-size:13px;color:var(--text-muted);" id="doneSummary"></p>
+    <button class="btn-ghost" onclick="editRegistration()">Edit details</button>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="shared.js"></script>
+<script>
+let state = loadState(), cfg = loadCfg(), sb = null;
+const SKILLS_KEY = 'itlympics_skills_reg_v1';
+
+function loadSkillsReg(){ try{ const r = localStorage.getItem(SKILLS_KEY); if(r) return JSON.parse(r); }catch(e){} return null; }
+function saveSkillsReg(reg){ try{ localStorage.setItem(SKILLS_KEY, JSON.stringify(reg)); }catch(e){} }
+
+function showToast(msg, warn){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  t.classList.toggle('warn', !!warn);
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(()=>t.classList.remove('show'), warn ? 3600 : 2400);
+}
+
+function renderNetStatus(){
+  const dot=document.getElementById('netDot'), label=document.getElementById('netLabel');
+  dot.className='dot '+(state.online?'on':'off');
+  label.textContent = state.online ? 'Venue wifi: online' : 'Venue wifi: offline — will save locally and sync later';
+}
+
+let chosenSection = null;
+
+function initSectionBox(){
+  const input = document.getElementById('skSection');
+  const list = document.getElementById('skSectionList');
+  initCombobox(input, list, SECTIONS, (val)=>{ chosenSection = val; });
+}
+
+// Prefills from the Passport registration (same student), and from any
+// skills registration already saved on this device.
+function prefill(){
+  const reg = loadSkillsReg();
+  document.getElementById('skName').value = reg?.name || state.name || '';
+  document.getElementById('skId').value = reg?.studentId || state.studentId || '';
+  document.getElementById('skSection').value = reg?.section || '';
+  chosenSection = reg?.section || null;
+  if(reg) showDone(reg);
+}
+
+function showErr(msg){ const e=document.getElementById('skErr'); e.textContent=msg; e.style.display='block'; }
+function clearErr(){ document.getElementById('skErr').style.display='none'; }
+
+async function submitSkillsReg(){
+  const name = document.getElementById('skName').value.trim();
+  const studentId = document.getElementById('skId').value.trim();
+  const section = document.getElementById('skSection').value.trim();
+
+  if(!name || !studentId || !section){ showErr('Name, Student ID and Section are all required.'); return; }
+  const nameErr = validateName(name); if(nameErr){ showErr(nameErr); return; }
+  const idErr = validateStudentId(studentId); if(idErr){ showErr(idErr); return; }
+  if(!SECTIONS.includes(section)){ showErr('Pick a section from the list (type your course, e.g. "BSIT", to filter).'); return; }
+  clearErr();
+
+  const reg = {name, studentId, section, savedAt: Date.now(), synced:false};
+  saveSkillsReg(reg);
+  showDone(reg);
+
+  if(sb){
+    try{
+      const {error} = await sb.from('skills_registrations').upsert({student_id: studentId, name, section});
+      if(error) throw error;
+      reg.synced = true; saveSkillsReg(reg);
+      showToast('Registered and synced to cloud');
+    }catch(e){
+      showToast('Saved on this device — will sync once online', true);
+    }
+  } else {
+    showToast('Saved on this device (cloud not configured)');
+  }
+}
+
+function showDone(reg){
+  document.getElementById('formView').style.display='none';
+  document.getElementById('doneView').style.display='block';
+  document.getElementById('doneSummary').textContent = `${reg.name} · ${reg.studentId} · ${reg.section}` + (reg.synced ? '' : ' (pending sync)');
+}
+function editRegistration(){
+  document.getElementById('formView').style.display='block';
+  document.getElementById('doneView').style.display='none';
+}
+
+// ---- init ----
+function initSb(){ sb = initSupabase(cfg); if(sb){ const pending = loadSkillsReg(); if(pending && !pending.synced) submitSkillsReg(); } }
+initSectionBox();
+prefill();
+renderNetStatus();
+initSb();
+window.addEventListener('online', ()=>{ state.online=true; saveState(state); renderNetStatus(); const pending=loadSkillsReg(); if(pending && !pending.synced && sb) submitSkillsReg(); });
+window.addEventListener('offline', ()=>{ state.online=false; saveState(state); renderNetStatus(); });
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('service-worker.js').catch(e=>console.warn('SW registration failed', e)); }
+</script>
+</body>
+</html>

@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F3A5F">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>ITLympics Game Con Voting</title>
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  .cat-tabs{display:flex;gap:8px;overflow-x:auto;margin-bottom:16px;padding-bottom:2px;}
+  .cat-tab{flex-shrink:0;font-size:12px;padding:8px 12px;border:1px solid var(--line);border-radius:20px;background:var(--paper-card);cursor:pointer;color:var(--text-muted);white-space:nowrap;}
+  .cat-tab.active{border-color:var(--amber);color:var(--ink);font-weight:500;}
+  .cat-tab .check{color:var(--success);margin-right:4px;}
+  .candidate{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;}
+  .candidate.selected{border-color:var(--amber);background:color-mix(in srgb, var(--amber) 10%, transparent);}
+  .candidate.voted{cursor:default;}
+  .bar-row{margin-bottom:12px;}
+  .bar-label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;}
+  .bar-track{background:var(--paper);border:1px solid var(--line);border-radius:6px;height:14px;overflow:hidden;}
+  .bar-fill{background:var(--amber);height:100%;transition:width .3s;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <p class="eyebrow">ITLympics 2027</p>
+      <h1 class="stamp-font">Game Con Voting</h1>
+    </div>
+  </header>
+  <nav class="pagenav">
+    <a href="index.html">Passport</a>
+    <a href="booth.html">QR Booth</a>
+    <a href="skills.html">Skills Reg</a>
+    <a href="entrance.html">Entrance</a>
+    <a href="vote.html" class="active">Vote</a>
+    <a href="testing.html">Testing</a>
+  </nav>
+
+  <div class="status-bar">
+    <div><span class="dot" id="netDot"></span><span id="netLabel">Venue wifi: checking...</span></div>
+  </div>
+
+  <div id="needsRegView" class="card" style="display:none;">
+    <p style="margin:0;">Register on the <a href="index.html">Passport page</a> first — voting is tied to your student ID.</p>
+  </div>
+
+  <div id="needsCloudView" class="card" style="display:none;">
+    <p style="margin:0;">Voting needs a live cloud connection so we can guarantee one vote per person, per category — ask staff to confirm the cloud backend is configured, then reload this page.</p>
+  </div>
+
+  <div id="mainView" style="display:none;">
+    <div class="cat-tabs" id="catTabs"></div>
+
+    <div class="card">
+      <p style="font-size:13px;color:var(--text-muted);margin-top:0;" id="catNote">One vote per student ID per category — checked against the cloud, not just this device.</p>
+      <div id="candidateList"></div>
+      <button class="btn-primary" id="voteBtn" onclick="castVote()" disabled>Cast vote</button>
+      <p class="err" id="voteErr" style="display:none;"></p>
+      <p id="votedNote" style="display:none;margin:10px 0 0;font-size:13px;">You voted for <strong id="votedFor"></strong> in this category.</p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;font-size:14px;">Live results <span id="totalVotes" style="color:var(--text-muted);font-weight:400;"></span></h3>
+      <div id="results"></div>
+    </div>
+  </div>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="shared.js"></script>
+<script>
+let state = loadState(), cfg = loadCfg(), sb = null;
+let activeCategory = VOTE_CATEGORIES[0].id;
+const selected = {};   // categoryId -> candidateId picked but not yet cast
+const myVotes = {};    // categoryId -> candidateId already cast by this student
+const counts = {};     // categoryId -> {candidateId: n}
+const countedKeys = new Set(); // "studentId:categoryId" already tallied, so realtime never double-counts our own insert
+VOTE_CATEGORIES.forEach(cat=>{ counts[cat.id] = {}; cat.candidates.forEach(c=>counts[cat.id][c.id]=0); });
+
+function categoryById(id){ return VOTE_CATEGORIES.find(c=>c.id===id); }
+
+function showToast(msg, warn){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  t.classList.toggle('warn', !!warn);
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(()=>t.classList.remove('show'), warn ? 3600 : 2400);
+}
+function renderNetStatus(){
+  const dot=document.getElementById('netDot'), label=document.getElementById('netLabel');
+  dot.className='dot '+(state.online?'on':'off');
+  label.textContent = state.online ? 'Venue wifi: online' : 'Venue wifi: offline — voting needs a connection';
+  const btn = document.getElementById('voteBtn');
+  if(btn) btn.disabled = !state.online || !!myVotes[activeCategory] || !selected[activeCategory];
+}
+
+function tallyRow(r){
+  const key = r.student_id+':'+r.category_id;
+  if(countedKeys.has(key)) return;
+  countedKeys.add(key);
+  if(counts[r.category_id] && counts[r.category_id][r.candidate_id]!==undefined) counts[r.category_id][r.candidate_id]++;
+}
+
+function renderTabs(){
+  const wrap = document.getElementById('catTabs');
+  wrap.innerHTML = '';
+  VOTE_CATEGORIES.forEach(cat=>{
+    const el = document.createElement('div');
+    el.className = 'cat-tab' + (cat.id===activeCategory ? ' active' : '');
+    el.innerHTML = (myVotes[cat.id] ? '<span class="check">✓</span>' : '') + cat.title;
+    el.onclick = ()=>{ activeCategory = cat.id; renderAll(); };
+    wrap.appendChild(el);
+  });
+}
+
+function renderCandidates(){
+  const cat = categoryById(activeCategory);
+  const voted = !!myVotes[activeCategory];
+  const list = document.getElementById('candidateList');
+  list.innerHTML = '';
+  cat.candidates.forEach(c=>{
+    const isMine = myVotes[activeCategory]===c.id;
+    const el = document.createElement('div');
+    el.className = 'candidate' + (selected[activeCategory]===c.id || isMine ? ' selected' : '') + (voted ? ' voted' : '');
+    el.textContent = c.name;
+    if(!voted) el.onclick = ()=>{ selected[activeCategory]=c.id; renderCandidates(); renderNetStatus(); };
+    list.appendChild(el);
+  });
+  document.getElementById('votedNote').style.display = voted ? 'block' : 'none';
+  if(voted) document.getElementById('votedFor').textContent = cat.candidates.find(c=>c.id===myVotes[activeCategory])?.name || myVotes[activeCategory];
+  document.getElementById('voteErr').style.display='none';
+}
+
+function renderResults(){
+  const cat = categoryById(activeCategory);
+  const results = document.getElementById('results'), total = document.getElementById('totalVotes');
+  const sum = Object.values(counts[activeCategory]).reduce((a,b)=>a+b,0);
+  total.textContent = `(${sum} vote${sum===1?'':'s'})`;
+  results.innerHTML = '';
+  cat.candidates.forEach(c=>{
+    const n = counts[activeCategory][c.id]||0;
+    const pct = sum ? Math.round((n/sum)*100) : 0;
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    row.innerHTML = `<div class="bar-label"><span>${c.name}</span><span>${n} (${pct}%)</span></div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>`;
+    results.appendChild(row);
+  });
+}
+
+function renderAll(){ renderTabs(); renderCandidates(); renderNetStatus(); renderResults(); }
+
+async function castVote(){
+  const catId = activeCategory;
+  const candId = selected[catId];
+  const err = document.getElementById('voteErr');
+  err.style.display='none';
+  if(!candId){ err.textContent='Pick an entry first.'; err.style.display='block'; return; }
+  if(!state.online || !sb){ err.textContent='You need to be online to vote.'; err.style.display='block'; return; }
+
+  document.getElementById('voteBtn').disabled = true;
+  try{
+    const {error} = await sb.from('votes').insert({student_id: state.studentId, category_id: catId, candidate_id: candId});
+    if(error){
+      if(error.code === '23505'){
+        const {data} = await sb.from('votes').select('candidate_id').eq('student_id', state.studentId).eq('category_id', catId).single();
+        myVotes[catId] = data ? data.candidate_id : candId;
+        showToast('You already voted in this category', true);
+      } else {
+        err.textContent = 'Could not reach the server — try again.';
+        err.style.display='block';
+      }
+    } else {
+      myVotes[catId] = candId;
+      tallyRow({student_id: state.studentId, category_id: catId, candidate_id: candId});
+      showToast('Vote cast!');
+    }
+  }catch(e){
+    err.textContent = 'Could not reach the server — try again.';
+    err.style.display='block';
+  }
+  renderAll();
+}
+
+async function loadExistingVotes(){
+  const {data} = await sb.from('votes').select('category_id,candidate_id').eq('student_id', state.studentId);
+  (data||[]).forEach(r=>{ myVotes[r.category_id]=r.candidate_id; tallyRow({student_id: state.studentId, ...r}); });
+}
+async function loadAllResults(){
+  const {data} = await sb.from('votes').select('student_id,category_id,candidate_id');
+  (data||[]).forEach(r=>tallyRow(r));
+}
+
+async function initSb(){
+  sb = initSupabase(cfg);
+
+  if(!state.studentId){ document.getElementById('needsRegView').style.display='block'; return; }
+  if(!sb){ document.getElementById('needsCloudView').style.display='block'; return; }
+
+  document.getElementById('mainView').style.display='block';
+  try{ await loadAllResults(); await loadExistingVotes(); }catch(e){}
+  renderAll();
+
+  subscribeTable(sb, 'votes', (payload)=>{
+    const r = payload.new; if(!r) return;
+    tallyRow(r);
+    if(r.category_id === activeCategory) renderResults();
+    if(r.student_id === state.studentId){ myVotes[r.category_id]=r.candidate_id; renderAll(); }
+  });
+}
+
+// ---- init ----
+renderNetStatus(); initSb();
+window.addEventListener('online', ()=>{ state.online=true; saveState(state); renderNetStatus(); });
+window.addEventListener('offline', ()=>{ state.online=false; saveState(state); renderNetStatus(); });
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('service-worker.js').catch(e=>console.warn('SW registration failed', e)); }
+</script>
+</body>
+</html>
