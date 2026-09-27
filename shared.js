@@ -13,10 +13,6 @@ const BOOTHS = [
   {id:'b6', name:'Cosplay'},
 ];
 
-// Demo-only secrets. In production these never ship to the client — validation
-// happens server-side (e.g. a Supabase Edge Function) at sync time instead.
-const BOOTH_SECRETS = {b1:'s-code',b2:'s-valo',b3:'s-mlbb',b4:'s-triv',b5:'s-chess',b6:'s-cos'};
-
 const STORE_KEY = 'itlympics_passport_v1';
 const CFG_KEY = 'itlympics_supabase_cfg';
 const ROTATION_KEY = 'itlympics_rotation_v1';
@@ -157,7 +153,7 @@ function initCombobox(inputEl, listEl, options, onPick){
 // Each stamp is {scannedAt, receivedAt, notSure} — scannedAt is this
 // device's local clock the moment it accepted the code, receivedAt is filled
 // in once the cloud write confirms, notSure marks a stamp that only passed
-// because of the backward grace period (see validateCode below).
+// because of the backward grace period (see validateBoothCode below).
 function normalizeStamps(stamps){
   const out = {};
   Object.keys(stamps||{}).forEach(id=>{
@@ -178,9 +174,17 @@ function loadState(){
 function saveState(state){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(state)); }catch(e){} }
 
 // ---- Supabase config ----
+// Every attendee's phone is a fresh, unrelated browser — there's no shared
+// backend to auto-discover. So "automatic" here means: bake the event's own
+// project URL/anon key in as defaults below, and every page connects on
+// load with zero setup. The Configure screen still exists as a manual
+// override (e.g. pointing at a staging project), and anything saved there
+// wins over these defaults.
+const DEFAULT_SB_URL = '';
+const DEFAULT_SB_KEY = '';
 function loadCfg(){
   try{ const r = localStorage.getItem(CFG_KEY); if(r) return JSON.parse(r); }catch(e){}
-  return {url:'', key:''};
+  return {url:DEFAULT_SB_URL, key:DEFAULT_SB_KEY};
 }
 function saveCfg(cfg){ try{ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }catch(e){} }
 function initSupabase(cfg){
@@ -209,59 +213,34 @@ function saveRotation(seconds){
   try{ localStorage.setItem(ROTATION_KEY, String(Math.max(5, parseInt(seconds)||30))); }catch(e){}
 }
 
-// ---- rotating code: HMAC-SHA256 via Web Crypto, windowed by absolute time ----
-async function hmac(secret, msg){
-  const enc = new TextEncoder();
-  const key = await crypto.subtle.importKey('raw', enc.encode(secret), {name:'HMAC', hash:'SHA-256'}, false, ['sign']);
-  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(msg));
-  return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,10);
-}
-function currentWindow(rotationSeconds, offsetSeconds){
-  return Math.floor((Date.now()/1000 + (offsetSeconds||0)) / rotationSeconds);
-}
-function codeForBooth(boothId, windowId){ return hmac(BOOTH_SECRETS[boothId], boothId+':'+windowId); }
-
-// A code is valid inside its own rotation window, plus a short backward-only
-// grace period right after it rolls over — never forward. Concretely, with
-// the default 30s rotation and a 5s grace: a code is good for the full 30s
-// it's on screen, and then for up to another 5s after the *next* code has
-// already replaced it (only if we're still within the first 5s of that new
-// window). That makes the effective scan window ~35s, but it's asymmetric —
-// nobody can pre-scan a code before its window starts.
+// ---- rotating code: generated and verified server-side via Supabase RPC ----
+// The per-booth secrets and the HMAC/grace-period math used to live here on
+// the client (see git history) — that meant anyone reading this public repo
+// could compute a valid code for any booth without ever showing up. They now
+// live only in the `booth_secrets` table, readable by nobody, and the two
+// Postgres functions below (`generate_booth_code`, `validate_booth_code`) do
+// the same HMAC + grace-period check the old client code did, but on the
+// server. See the SQL schema (Testing page) for the exact logic and the
+// grace-period rationale.
 //
-// This replaces the old `Math.abs(myWindow - windowId) > 1` check, which
-// looked like a "±1 window" tolerance but actually accepted the *next*
-// window's code too (up to a full rotationSeconds early) and up to a full
-// rotationSeconds late — looser, in both directions, than intended.
-const GRACE_SECONDS = 5;
-
-async function validateCode(text, rotationSeconds, driftSeconds){
+// Trade-off: unlike the rest of this app, generating and validating a booth
+// code now requires a live Supabase connection — there's no local-only
+// fallback for this one piece. Booth devices are expected to stay on venue
+// wifi; if an attendee's phone is offline when they scan, the scan simply
+// can't be verified until they're back online.
+async function generateBoothCode(sb, boothId, rotationSeconds){
+  if(!sb) return null;
+  const {data, error} = await sb.rpc('generate_booth_code', {p_booth_id: boothId, p_rotation_seconds: rotationSeconds});
+  if(error){ console.error('generate_booth_code failed', error); return null; }
+  return data;
+}
+async function validateBoothCode(sb, text, rotationSeconds){
   if(!text || !text.startsWith('BOOTH:')) return {ok:false, reason:'Not a booth code'};
-  const parts = text.split(':');
-  if(parts.length!==4) return {ok:false, reason:'Malformed code'};
-  const [,boothId, windowIdStr, code] = parts;
-  const booth = BOOTHS.find(b=>b.id===boothId);
-  if(!booth) return {ok:false, reason:'Unknown booth'};
-  const windowId = parseInt(windowIdStr, 10);
-  if(!Number.isFinite(windowId)) return {ok:false, reason:'Malformed code'};
-
-  const nowSeconds = Date.now()/1000 + (driftSeconds||0);
-  const myWindow = Math.floor(nowSeconds / rotationSeconds);
-  const secsIntoCurrentWindow = nowSeconds - myWindow*rotationSeconds;
-
-  let notSure = false;
-  if(windowId === myWindow){
-    // squarely inside the code's own window — nothing uncertain about it
-  } else if(windowId === myWindow - 1 && secsIntoCurrentWindow < GRACE_SECONDS){
-    // the window just rolled over, and we're still within the grace period —
-    // honor the just-expired code, but flag it as not-sure so staff can see
-    // it wasn't a clean in-window scan.
-    notSure = true;
-  } else {
-    return {ok:false, reason:'Expired code (outside sync window)', booth};
-  }
-
-  const expected = await codeForBooth(boothId, windowId);
-  if(expected !== code) return {ok:false, reason:'Invalid code (signature mismatch)', booth};
-  return {ok:true, booth, notSure};
+  if(!sb) return {ok:false, reason:"Can't verify right now — cloud backend not connected"};
+  const {data, error} = await sb.rpc('validate_booth_code', {p_code: text, p_rotation_seconds: rotationSeconds});
+  if(error){ console.error('validate_booth_code failed', error); return {ok:false, reason:'Verification failed — try again'}; }
+  const row = Array.isArray(data) ? data[0] : data;
+  if(!row) return {ok:false, reason:'Verification failed — try again'};
+  const booth = row.booth_id ? BOOTHS.find(b=>b.id===row.booth_id) : undefined;
+  return {ok:row.ok, reason:row.reason, notSure:row.not_sure, booth};
 }

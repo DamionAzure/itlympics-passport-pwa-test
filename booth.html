@@ -14,6 +14,7 @@
 <link rel="stylesheet" href="shared.css">
 <!-- Vendored locally (./vendor/) — see index.html for why. -->
 <script src="vendor/qrcode.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -33,6 +34,11 @@
     <a href="testing.html">Testing</a>
   </nav>
 
+  <div class="status-bar">
+    <div id="cloudLabel">Cloud backend: not configured</div>
+    <button class="btn-ghost" style="padding:6px 12px;font-size:12px;" onclick="openSettings()">Configure</button>
+  </div>
+
   <div class="card">
     <label for="boothSelect">This device is displaying for</label>
     <select id="boothSelect" onchange="onBoothChange()"></select>
@@ -48,21 +54,59 @@
     <div style="font-size:13px;color:var(--amber);margin-top:8px;" id="genCountdown"></div>
   </div>
 
-  <p class="demo-note">Attendees scan this with their Passport app's camera to get stamped. The code rotates automatically, built from an HMAC of the booth ID and the current time window — this device needs no network connection to keep rotating it.</p>
+  <p class="demo-note">Attendees scan this with their Passport app's camera to get stamped. The code rotates automatically, verified server-side against the booth secret — keep this device on venue wifi, since it needs a live connection to generate each code (see Configure).</p>
 
+</div>
+
+<div class="modal" id="settingsModal">
+  <div class="modal-card">
+    <h3 style="margin-top:0;">Cloud backend (Supabase)</h3>
+    <label for="sbUrl">Project URL</label>
+    <input type="text" id="sbUrl" placeholder="https://xxxx.supabase.co">
+    <label for="sbKey">Anon public key</label>
+    <input type="text" id="sbKey" placeholder="eyJ...">
+    <p class="demo-note">Required on this device — the rotating code is generated server-side now, so the booth secrets never ship here. See the Testing page for the SQL schema.</p>
+    <div class="row">
+      <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
 </div>
 <div class="toast" id="toast"></div>
 
 <script src="shared.js"></script>
 <script>
 const BOOTH_DEVICE_KEY = 'itlympics_booth_device_v1';
-let genTimer=null;
+let genTimer=null, lastFetchedWindow=null, lastRaw=null;
+let cfg = loadCfg(), sb = null;
 
 function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
   clearTimeout(showToast._t);
   showToast._t = setTimeout(()=>t.classList.remove('show'), 2400);
+}
+
+// ---- Supabase (cloud backend) ----
+// Required on this page now: generate_booth_code is an RPC, not local math.
+function initSb(){ sb = initSupabase(cfg); renderCloudStatus(); startGenerator(); }
+function renderCloudStatus(){
+  const el = document.getElementById('cloudLabel');
+  if(el) el.textContent = sb ? 'Cloud backend: connected' : 'Cloud backend: not configured';
+}
+function openSettings(){
+  document.getElementById('sbUrl').value = cfg.url;
+  document.getElementById('sbKey').value = cfg.key;
+  document.getElementById('settingsModal').style.display='flex';
+}
+function closeSettings(){ document.getElementById('settingsModal').style.display='none'; }
+function saveSettings(){
+  cfg.url = document.getElementById('sbUrl').value.trim();
+  cfg.key = document.getElementById('sbKey').value.trim();
+  saveCfg(cfg); closeSettings();
+  lastFetchedWindow = null; // force a fresh fetch under the new connection
+  initSb();
+  showToast(sb ? 'Connected to Supabase' : 'Cloud not configured — codes will not generate');
 }
 
 function loadBoothSelection(){ try{ return localStorage.getItem(BOOTH_DEVICE_KEY) || BOOTHS[0].id; }catch(e){ return BOOTHS[0].id; } }
@@ -76,32 +120,53 @@ function populateBoothSelect(){
 
 function onBoothChange(){
   saveBoothSelection(document.getElementById('boothSelect').value);
+  lastFetchedWindow = null; // new booth — force an immediate fetch
   refreshGenerator();
 }
 function onRotationChange(){
   const secs = Math.max(5, parseInt(document.getElementById('rotationInput').value)||30);
   saveRotation(secs);
   document.getElementById('rotationInput').value = secs;
-  startGenerator();
+  lastFetchedWindow = null;
+  refreshGenerator();
 }
 
+// Ticks every second for the on-screen countdown, but only calls the RPC
+// (generate_booth_code) when the rotation window actually changes — no
+// point hitting Supabase 30x per rotation just to redraw the same code.
 async function refreshGenerator(){
   const boothId = document.getElementById('boothSelect').value;
   const booth = BOOTHS.find(b=>b.id===boothId);
   document.getElementById('boothName').textContent = booth ? booth.name : '';
   const rotationSeconds = loadRotation();
-  const windowId = currentWindow(rotationSeconds);
-  const code = await codeForBooth(boothId, windowId);
-  const raw = `BOOTH:${boothId}:${windowId}:${code}`;
+  const nowWindow = Math.floor(Date.now()/1000 / rotationSeconds);
+  const secsLeft = rotationSeconds - (Math.floor(Date.now()/1000) % rotationSeconds);
+
+  if(!sb){
+    document.getElementById('genQr').innerHTML='';
+    document.getElementById('genRaw').textContent = "Can't generate — cloud backend not connected (see Configure)";
+    document.getElementById('genCountdown').textContent = '';
+    return;
+  }
+
+  if(nowWindow !== lastFetchedWindow){
+    lastFetchedWindow = nowWindow;
+    lastRaw = await generateBoothCode(sb, boothId, rotationSeconds);
+  }
+
   const box = document.getElementById('genQr'); box.innerHTML='';
+  if(!lastRaw){
+    document.getElementById('genRaw').textContent = 'Verification failed — check connection and try again';
+    document.getElementById('genCountdown').textContent = '';
+    return;
+  }
   // colorDark is pure black, not the brand navy (#1F3A5F) — a QR scanner
   // reads luminance contrast, and navy-on-white gives noticeably less of it
   // than black-on-white once it's gone through a screen → camera → exposure
   // pipeline. This is the code attendees actually scan, so contrast matters
   // most here.
-  new QRCode(box, {text: raw, width:220, height:220, colorDark:'#000000', colorLight:'#ffffff'});
-  document.getElementById('genRaw').textContent = raw;
-  const secsLeft = rotationSeconds - (Math.floor(Date.now()/1000) % rotationSeconds);
+  new QRCode(box, {text: lastRaw, width:220, height:220, colorDark:'#000000', colorLight:'#ffffff'});
+  document.getElementById('genRaw').textContent = lastRaw;
   document.getElementById('genCountdown').textContent = `rotates in ${secsLeft}s`;
 }
 function startGenerator(){ refreshGenerator(); clearInterval(genTimer); genTimer = setInterval(refreshGenerator, 1000); }
@@ -109,7 +174,7 @@ function startGenerator(){ refreshGenerator(); clearInterval(genTimer); genTimer
 // ---- init ----
 populateBoothSelect();
 document.getElementById('rotationInput').value = loadRotation();
-startGenerator();
+initSb();
 </script>
 </body>
 </html>

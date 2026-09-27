@@ -36,7 +36,10 @@
   video{width:100%;display:block;}
   .scan-frame{position:absolute;inset:20%;border:2px solid var(--amber);border-radius:8px;pointer-events:none;}
   .badge-row{display:flex;align-items:center;gap:14px;}
-  #badgeQr{border-radius:8px;overflow:hidden;flex-shrink:0;background:#fff;padding:8px;}
+  #badgeQr{border-radius:8px;overflow:hidden;flex-shrink:0;background:#fff;padding:8px;cursor:pointer;}
+  .qr-modal-card{background:#fff;border-radius:16px;padding:16px;display:flex;flex-direction:column;align-items:center;gap:14px;max-width:96vw;}
+  #badgeQrLarge{line-height:0;background:#fff;padding:16px;border-radius:12px;}
+  .qr-modal-hint{font-size:12px;color:var(--text-muted);text-align:center;}
 </style>
 </head>
 <body>
@@ -78,12 +81,12 @@
     </div>
 
     <div class="card">
-      <div class="badge-row">
+      <div class="badge-row" onclick="openBadgeQr()">
         <div id="badgeQr"></div>
         <div>
           <div style="font-size:15px;font-weight:500;" id="badgeName"></div>
           <div style="font-size:12px;color:var(--text-muted);" id="badgeId"></div>
-          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Show this at the alumni / entrance gate</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Show this at the alumni / entrance gate — tap to enlarge</div>
         </div>
       </div>
     </div>
@@ -125,6 +128,17 @@
     </div>
   </div>
 
+  <div class="modal" id="qrModal" onclick="closeBadgeQr()">
+    <div class="qr-modal-card" onclick="event.stopPropagation()">
+      <div id="badgeQrLarge"></div>
+      <div style="text-align:center;">
+        <div style="font-size:17px;font-weight:600;color:#1F3A5F;" id="badgeNameLarge"></div>
+        <div style="font-size:13px;color:#6b6f6d;" id="badgeIdLarge"></div>
+      </div>
+      <p class="qr-modal-hint">Tap anywhere to close</p>
+    </div>
+  </div>
+
 </div>
 <div class="toast" id="toast"></div>
 
@@ -155,6 +169,26 @@ function openSettings(){
   document.getElementById('settingsModal').style.display='flex';
 }
 function closeSettings(){ document.getElementById('settingsModal').style.display='none'; }
+
+// ---- enlarged badge QR (tap the small badge to fill most of the screen —
+// easier for gate staff to scan than the small inline one) ----
+function renderBadgeQrLarge(){
+  const box = document.getElementById('badgeQrLarge');
+  box.innerHTML = '';
+  // Leave room for the white quiet-zone padding on #badgeQrLarge (16px/side)
+  // and the modal card's own padding (16px/side) so the card never exceeds
+  // the viewport even when the code itself is sized to fill most of it.
+  const size = Math.round(Math.min(window.innerWidth*0.92 - 64, window.innerHeight*0.62, 460));
+  new QRCode(box, {text:'STUDENT:'+state.studentId, width:size, height:size, colorDark:'#000000', colorLight:'#ffffff'});
+  document.getElementById('badgeNameLarge').textContent = state.name;
+  document.getElementById('badgeIdLarge').textContent = state.studentId;
+}
+function openBadgeQr(){
+  if(!state.studentId) return;
+  renderBadgeQrLarge();
+  document.getElementById('qrModal').style.display='flex';
+}
+function closeBadgeQr(){ document.getElementById('qrModal').style.display='none'; }
 function saveSettings(){
   cfg.url = document.getElementById('sbUrl').value.trim();
   cfg.key = document.getElementById('sbKey').value.trim();
@@ -232,6 +266,7 @@ function renderMain(){
   document.getElementById('badgeQr').innerHTML='';
   // Pure black, not navy — see booth.html for why (max contrast for scanning).
   new QRCode(document.getElementById('badgeQr'), {text:'STUDENT:'+state.studentId, width:64, height:64, colorDark:'#000000', colorLight:'#ffffff'});
+  if(document.getElementById('qrModal').style.display==='flex') renderBadgeQrLarge();
 
   const grid = document.getElementById('stampGrid'); grid.innerHTML='';
   BOOTHS.forEach(b=>{
@@ -345,7 +380,7 @@ function exportPassportPNG(){
 // signals someone tried a stale screenshot or a forged code. Those get
 // logged (not just toasted) so staff can review it later at Testing > Flagged.
 async function handleScannedText(text){
-  const result = await validateCode(text, loadRotation(), 0);
+  const result = await validateBoothCode(sb, text, loadRotation());
   if(result.ok){ addStamp(result.booth.id, result.booth.name, result.notSure); return; }
 
   const flagWorthy = result.reason.startsWith('Expired code') || result.reason.startsWith('Invalid code');

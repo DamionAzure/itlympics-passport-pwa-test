@@ -26,9 +26,9 @@
   <nav class="pagenav">
     <a href="index.html">Passport</a>
     <a href="booth.html">QR Booth</a>
-    <a href="skills.html">Skills Registration</a>
+    <a href="skills.html">Skills Reg</a>
     <a href="entrance.html">Entrance</a>
-    <a href="vote.html">Voting</a>
+    <a href="vote.html">Vote</a>
     <a href="testing.html" class="active">Testing</a>
   </nav>
 
@@ -62,7 +62,7 @@
 
   <div class="demo-section">
     <h3>Clock drift test</h3>
-    <p class="demo-note">Simulates this device's clock being off from real time, to test the scan window. A code is valid for its full rotation window, plus up to 5s of backward-only grace right after it rolls over — never early. With the default 30s rotation that's an effective ~35s window. This is a session-only setting for this page — it isn't saved.</p>
+    <p class="demo-note">Heads up: this no longer does anything. Validation now runs server-side (see generate_booth_code / validate_booth_code), so only Supabase's clock matters — this device's clock being off from real time can't affect the result anymore. Left here as a reminder rather than removed outright; a code is still valid for its full rotation window plus up to 5s of backward-only grace right after it rolls over, per the SQL below.</p>
     <input type="range" id="driftSlider" min="-90" max="90" value="0" oninput="onDriftChange()" style="width:100%;">
     <div style="font-size:12px;color:var(--text-muted);" id="driftLabel">Simulated clock drift: 0s</div>
   </div>
@@ -121,6 +121,89 @@ create table flagged_scans (
 );
 -- If stamps already exists without received_at:
 -- alter table stamps add column received_at timestamptz not null default now();</pre>
+    <p class="demo-note">Booth codes: secrets live only in this table (no select policy for anon at all — nothing but the two functions below can ever read it), and generation/verification happen inside these two security-definer functions instead of in the client. To rotate a booth's secret later, just update this table — no redeploy needed.</p>
+    <pre style="font-size:10px;overflow-x:auto;background:var(--paper);padding:8px;border-radius:6px;">create extension if not exists pgcrypto;
+
+create table booth_secrets (
+  booth_id text primary key,
+  secret text not null
+);
+alter table booth_secrets enable row level security;
+-- deliberately: no select policy for anon/authenticated. Nobody with the
+-- anon key can read this table directly, ever — only the functions below,
+-- which run as security definer, can see it.
+
+insert into booth_secrets (booth_id, secret) values
+  ('b1','s-code'), ('b2','s-valo'), ('b3','s-mlbb'),
+  ('b4','s-triv'), ('b5','s-chess'), ('b6','s-cos');
+-- ^ these match the old client-side placeholder values — change them to
+-- real secrets before the event (that's now just an `update`, see below).
+
+create or replace function generate_booth_code(p_booth_id text, p_rotation_seconds int default 30)
+returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  v_secret text;
+  v_window_id bigint;
+begin
+  select secret into v_secret from booth_secrets where booth_id = p_booth_id;
+  if v_secret is null then return null; end if;
+  v_window_id := floor(extract(epoch from now()) / p_rotation_seconds);
+  return 'BOOTH:' || p_booth_id || ':' || v_window_id || ':' ||
+    substring(encode(hmac(p_booth_id || ':' || v_window_id::text, v_secret, 'sha256'), 'hex') from 1 for 10);
+end;
+$$;
+
+create or replace function validate_booth_code(p_code text, p_rotation_seconds int default 30)
+returns table(ok boolean, booth_id text, not_sure boolean, reason text)
+language plpgsql security definer set search_path = public as $$
+declare
+  v_parts text[];
+  v_booth_id text; v_window_id bigint; v_code text; v_secret text;
+  v_now numeric; v_my_window bigint; v_secs_into numeric;
+  v_expected text; v_not_sure boolean := false;
+  v_grace_seconds constant int := 5;
+begin
+  if p_code is null or left(p_code, 6) <> 'BOOTH:' then
+    return query select false, null::text, false, 'Not a booth code'; return;
+  end if;
+  v_parts := string_to_array(p_code, ':');
+  if array_length(v_parts, 1) <> 4 then
+    return query select false, null::text, false, 'Malformed code'; return;
+  end if;
+  v_booth_id := v_parts[2];
+  v_window_id := nullif(v_parts[3], '')::bigint;
+  v_code := v_parts[4];
+  if v_window_id is null then
+    return query select false, null::text, false, 'Malformed code'; return;
+  end if;
+  select secret into v_secret from booth_secrets where booth_id = v_booth_id;
+  if v_secret is null then
+    return query select false, null::text, false, 'Unknown booth'; return;
+  end if;
+  v_now := extract(epoch from now());
+  v_my_window := floor(v_now / p_rotation_seconds);
+  v_secs_into := v_now - v_my_window * p_rotation_seconds;
+  if v_window_id = v_my_window then
+    v_not_sure := false;
+  elsif v_window_id = v_my_window - 1 and v_secs_into < v_grace_seconds then
+    v_not_sure := true;
+  else
+    return query select false, v_booth_id, false, 'Expired code (outside sync window)'; return;
+  end if;
+  v_expected := substring(encode(hmac(v_booth_id || ':' || v_window_id::text, v_secret, 'sha256'), 'hex') from 1 for 10);
+  if v_expected <> v_code then
+    return query select false, v_booth_id, false, 'Invalid code (signature mismatch)'; return;
+  end if;
+  return query select true, v_booth_id, v_not_sure, null::text;
+end;
+$$;
+
+grant execute on function generate_booth_code(text, int) to anon, authenticated;
+grant execute on function validate_booth_code(text, int) to anon, authenticated;
+
+-- To rotate a secret later, no redeploy needed:
+-- update booth_secrets set secret = 'new-secret-here' where booth_id = 'b1';</pre>
     <div class="row">
       <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
       <button class="btn-primary" onclick="saveSettings()">Save</button>
@@ -335,7 +418,7 @@ async function handleScannedText(text){
   lastScannedCode = text;
   document.getElementById('replayBox').style.display='block';
   document.getElementById('replayRaw').textContent = text;
-  const result = await validateCode(text, loadRotation(), driftSeconds);
+  const result = await validateBoothCode(sb, text, loadRotation());
   if(result.ok){ addStamp(result.booth.id, result.booth.name, result.notSure); }
   else {
     showToast('Scan rejected: '+result.reason);
@@ -349,7 +432,7 @@ async function handleScannedText(text){
 async function replayLastCode(){
   if(!lastScannedCode) return;
   log('Replaying captured code...');
-  const result = await validateCode(lastScannedCode, loadRotation(), driftSeconds);
+  const result = await validateBoothCode(sb, lastScannedCode, loadRotation());
   if(result.ok){
     showToast(result.notSure ? 'Replay accepted — not sure (grace period)' : 'Replay accepted (still within window)', !!result.notSure);
     log(result.notSure ? 'Replay accepted — flagged not-sure (grace period)' : 'Replay accepted');
@@ -361,9 +444,9 @@ async function replayLastCode(){
 }
 async function simulateScan(boothId, boothName){
   const rotationSeconds = loadRotation();
-  const windowId = currentWindow(rotationSeconds);
-  const code = await codeForBooth(boothId, windowId);
-  await handleScannedText(`BOOTH:${boothId}:${windowId}:${code}`);
+  const raw = await generateBoothCode(sb, boothId, rotationSeconds);
+  if(!raw){ showToast("Can't simulate — cloud backend not connected"); return; }
+  await handleScannedText(raw);
 }
 function onDriftChange(){
   driftSeconds = parseInt(document.getElementById('driftSlider').value)||0;
