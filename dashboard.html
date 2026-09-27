@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F3A5F">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>ITLympics Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;}
+  .stat-card{border:1px solid var(--line);border-radius:10px;padding:12px 8px;text-align:center;background:var(--paper-card);}
+  .stat-num{font-size:24px;font-weight:600;}
+  .stat-label{font-size:11px;color:var(--text-muted);margin-top:2px;}
+  .bar-row{margin-bottom:10px;}
+  .bar-label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;}
+  .bar-track{background:var(--paper);border:1px solid var(--line);border-radius:6px;height:12px;overflow:hidden;}
+  .bar-fill{background:var(--amber);height:100%;transition:width .3s;}
+  .cat-heading{font-size:12px;font-weight:500;color:var(--text-muted);margin:14px 0 6px;text-transform:uppercase;letter-spacing:.03em;}
+  .cat-heading:first-child{margin-top:0;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <p class="eyebrow">ITLympics 2027</p>
+      <h1 class="stamp-font">Dashboard</h1>
+    </div>
+  </header>
+  <nav class="pagenav">
+    <a href="index.html">Passport</a>
+    <a href="booth.html">QR Booth</a>
+    <a href="skills.html">Skills Reg</a>
+    <a href="entrance.html">Entrance</a>
+    <a href="vote.html">Vote</a>
+    <a href="testing.html">Testing</a>
+    <a href="dashboard.html" class="active">Dashboard</a>
+  </nav>
+
+  <div class="status-bar">
+    <div id="cloudLabel">Cloud backend: not configured</div>
+    <button class="btn-ghost" style="padding:6px 12px;font-size:12px;" onclick="loadAll()">Refresh</button>
+  </div>
+
+  <div id="needsCloudView" class="card" style="display:none;">
+    <p style="margin:0;">The Dashboard needs a live cloud connection to read event data. Configure it from the <a href="testing.html">Testing page</a>, then reload this page.</p>
+  </div>
+
+  <div id="mainView" style="display:none;">
+
+    <div class="card">
+      <div class="stat-grid">
+        <div class="stat-card"><div class="stat-num" id="statStudents">–</div><div class="stat-label">Passport registrations</div></div>
+        <div class="stat-card"><div class="stat-num" id="statSkills">–</div><div class="stat-label">Skills registrations</div></div>
+        <div class="stat-card"><div class="stat-num" id="statCheckins">–</div><div class="stat-label">Entrance check-ins</div></div>
+        <div class="stat-card"><div class="stat-num" id="statStamps">–</div><div class="stat-label">Booth stamps issued</div></div>
+        <div class="stat-card"><div class="stat-num" id="statVotes">–</div><div class="stat-label">Total votes cast</div></div>
+      </div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:10px;" id="lastUpdated"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;font-size:14px;">Registrations by course</h3>
+      <p class="demo-note" style="margin-bottom:8px;">Grouped from each attendee's section on Skills Registration.</p>
+      <div id="courseBreakdown"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;font-size:14px;">Booth stamps progress</h3>
+      <p class="demo-note" style="margin-bottom:8px;">Share of registered attendees who've been stamped at each booth.</p>
+      <div id="boothBreakdown"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;font-size:14px;">Voting leaderboards</h3>
+      <div id="voteBreakdown"></div>
+    </div>
+
+  </div>
+
+</div>
+
+<script src="shared.js"></script>
+<script>
+let cfg = loadCfg(), sb = null;
+let refreshTimer = null;
+
+function renderCloudStatus(){
+  const el = document.getElementById('cloudLabel');
+  if(el) el.textContent = sb ? 'Cloud backend: connected' : 'Cloud backend: not configured';
+}
+
+function barRow(label, n, denom){
+  const pct = denom ? Math.round((n/denom)*100) : 0;
+  const row = document.createElement('div');
+  row.className = 'bar-row';
+  row.innerHTML = `<div class="bar-label"><span>${label}</span><span>${n}${denom!=null ? ' / '+denom : ''} (${pct}%)</span></div>
+    <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>`;
+  return row;
+}
+
+async function loadAll(){
+  if(!sb) return;
+  try{
+    const [studentsRes, skillsRes, stampsRes, checkinsRes, votesRes] = await Promise.all([
+      sb.from('students').select('student_id', {count:'exact', head:true}),
+      sb.from('skills_registrations').select('student_id, section'),
+      sb.from('stamps').select('booth_id'),
+      sb.from('checkins').select('student_id', {count:'exact', head:true}),
+      sb.from('votes').select('category_id, candidate_id'),
+    ]);
+
+    const studentCount = studentsRes.count || 0;
+    const skillsRows = skillsRes.data || [];
+    const stampRows = stampsRes.data || [];
+    const checkinCount = checkinsRes.count || 0;
+    const voteRows = votesRes.data || [];
+
+    document.getElementById('statStudents').textContent = studentCount;
+    document.getElementById('statSkills').textContent = skillsRows.length;
+    document.getElementById('statCheckins').textContent = checkinCount;
+    document.getElementById('statStamps').textContent = stampRows.length;
+    document.getElementById('statVotes').textContent = voteRows.length;
+
+    // ---- registrations by course ----
+    const byCourse = {};
+    skillsRows.forEach(r=>{ const c = courseOf(r.section); byCourse[c] = (byCourse[c]||0)+1; });
+    const courseEl = document.getElementById('courseBreakdown');
+    courseEl.innerHTML = '';
+    const courses = Object.keys(byCourse).sort((a,b)=>byCourse[b]-byCourse[a]);
+    if(!courses.length) courseEl.textContent = 'No skills registrations yet.';
+    const courseMax = Math.max(1, ...courses.map(c=>byCourse[c]));
+    courses.forEach(c=>courseEl.appendChild(barRow(c, byCourse[c], courseMax)));
+
+    // ---- booth stamps progress (share of registered students stamped) ----
+    const byBooth = {};
+    BOOTHS.forEach(b=>byBooth[b.id]=0);
+    stampRows.forEach(r=>{ if(byBooth[r.booth_id]!==undefined) byBooth[r.booth_id]++; });
+    const boothEl = document.getElementById('boothBreakdown');
+    boothEl.innerHTML = '';
+    BOOTHS.forEach(b=>boothEl.appendChild(barRow(b.name, byBooth[b.id], studentCount)));
+
+    // ---- voting leaderboards, one per category ----
+    const voteEl = document.getElementById('voteBreakdown');
+    voteEl.innerHTML = '';
+    VOTE_CATEGORIES.forEach(cat=>{
+      const heading = document.createElement('div');
+      heading.className = 'cat-heading';
+      const catVotes = voteRows.filter(v=>v.category_id===cat.id);
+      heading.textContent = `${cat.title} (${catVotes.length})`;
+      voteEl.appendChild(heading);
+      const counts = {};
+      cat.candidates.forEach(c=>counts[c.id]=0);
+      catVotes.forEach(v=>{ if(counts[v.candidate_id]!==undefined) counts[v.candidate_id]++; });
+      cat.candidates.forEach(c=>voteEl.appendChild(barRow(c.name, counts[c.id], catVotes.length)));
+    });
+
+    document.getElementById('lastUpdated').textContent = 'Last updated ' + new Date().toLocaleTimeString();
+  }catch(e){
+    document.getElementById('lastUpdated').textContent = 'Refresh failed: ' + e.message;
+  }
+}
+
+// Any insert/update on the tables this dashboard reads triggers a full
+// re-fetch — simpler and less error-prone than tallying deltas client-side,
+// and this dashboard is read-only so there's no local state to reconcile.
+// Debounced so a burst of scans/votes doesn't fire a refresh per row.
+function scheduleRefresh(){
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(loadAll, 500);
+}
+
+function initSb(){
+  sb = initSupabase(cfg);
+  renderCloudStatus();
+  if(!sb){ document.getElementById('needsCloudView').style.display='block'; return; }
+  document.getElementById('mainView').style.display='block';
+  loadAll();
+  ['students','skills_registrations','stamps','checkins','votes'].forEach(t=>subscribeTable(sb, t, scheduleRefresh));
+}
+
+// ---- init ----
+initSb();
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('service-worker.js').catch(e=>console.warn('SW registration failed', e)); }
+</script>
+</body>
+</html>

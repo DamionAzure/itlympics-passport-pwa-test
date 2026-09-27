@@ -30,6 +30,7 @@
     <a href="entrance.html">Entrance</a>
     <a href="vote.html">Vote</a>
     <a href="testing.html" class="active">Testing</a>
+    <a href="dashboard.html">Dashboard</a>
   </nav>
 
   <div class="status-bar">
@@ -79,6 +80,28 @@
   </div>
 
   <div class="demo-section">
+    <h3>Per-table wipe</h3>
+    <p class="demo-note">Deletes every row from one cloud table — for resetting between test runs without touching the others. This only hits Supabase; it doesn't touch this device's local passport (use Full reset above for that), and it needs a confirmed cloud connection. <code>booth_secrets</code> is deliberately left off this list — wiping it breaks code generation for every booth until re-seeded.</p>
+    <div class="demo-booths" id="wipeButtons"></div>
+    <div class="row" style="margin-top:8px;">
+      <button class="btn-ghost" style="border-color:#b33333;color:#b33333;" onclick="wipeAllTables()">Wipe ALL tables</button>
+    </div>
+  </div>
+
+  <div class="demo-section">
+    <h3>Mock data</h3>
+    <p class="demo-note">Generates fake attendees with real writes — same tables and same code paths as an actual Registration or a real vote, just with made-up names and student IDs, so the Dashboard has something to look at. Not simulated locally like the booth scans above: these rows really land in Supabase.</p>
+    <div class="row">
+      <button class="btn-ghost" onclick="seedMockRegistrations(10)">+10 mock registrations</button>
+      <button class="btn-ghost" onclick="seedMockRegistrations(50)">+50 mock registrations</button>
+    </div>
+    <div class="row" style="margin-top:8px;">
+      <button class="btn-ghost" onclick="seedMockVotes(10)">+10 mock votes</button>
+      <button class="btn-ghost" onclick="seedMockVotes(50)">+50 mock votes</button>
+    </div>
+  </div>
+
+  <div class="demo-section">
     <h3>Live skills registrations</h3>
     <p class="demo-note">Updates in real time via Supabase Realtime as people register on any device — no polling, no Pusher needed. Needs Replication enabled on <code>skills_registrations</code> in the Supabase dashboard.</p>
     <div id="liveCounts" style="font-size:12px;color:var(--text-muted);margin-bottom:8px;"></div>
@@ -121,6 +144,17 @@ create table flagged_scans (
 );
 -- If stamps already exists without received_at:
 -- alter table stamps add column received_at timestamptz not null default now();</pre>
+    <p class="demo-note">Sections: used to live as a hardcoded list in <code>shared.js</code> — now it's this table instead, so staff can add/rename/remove sections without a redeploy. Skills Registration falls back to the old hardcoded list if this table is empty or unreachable.</p>
+    <pre style="font-size:10px;overflow-x:auto;background:var(--paper);padding:8px;border-radius:6px;">create table sections (name text primary key);
+insert into sections (name) values
+  ('BSIT 1-1'),('BSIT 1-2'),('BSIT 1-3'),('BSIT 2-1'),('BSIT 2-2'),('BSIT 2-3'),('BSIT 3-1'),('BSIT 3-2'),('BSIT 4-1'),('BSIT 4-2'),
+  ('BSCS 1-1'),('BSCS 1-2'),('BSCS 2-1'),('BSCS 2-2'),('BSCS 3-1'),('BSCS 3-2'),('BSCS 4-1'),
+  ('BSIS 1-1'),('BSIS 1-2'),('BSIS 2-1'),('BSIS 2-2'),('BSIS 3-1'),('BSIS 4-1'),
+  ('BSBA 1-1'),('BSBA 1-2'),('BSBA 2-1'),('BSBA 2-2'),('BSBA 3-1'),('BSBA 4-1'),
+  ('BSA 1-1'),('BSA 2-1'),('BSA 3-1'),('BSA 4-1'),
+  ('BEED 1-1'),('BEED 2-1'),('BEED 3-1'),('BEED 4-1'),
+  ('BSED 1-1'),('BSED 2-1'),('BSED 3-1'),('BSED 4-1')
+on conflict (name) do nothing;</pre>
     <p class="demo-note">Booth codes: secrets live only in this table (no select policy for anon at all — nothing but the two functions below can ever read it), and generation/verification happen inside these two security-definer functions instead of in the client. To rotate a booth's secret later, just update this table — no redeploy needed.</p>
     <pre style="font-size:10px;overflow-x:auto;background:var(--paper);padding:8px;border-radius:6px;">create extension if not exists pgcrypto;
 
@@ -298,11 +332,10 @@ function toggleNet(){
 }
 
 // ---- Supabase (cloud backend) ----
-function initSb(){ sb = initSupabase(cfg); renderCloudStatus(); initLiveRegs(); initFlags(); }
+function initSb(){ sb = initSupabase(cfg); renderCloudStatus(); initLiveRegs(); initFlags(); loadSections(sb).then(list=>sectionsList=list); }
 
 // ---- live skills registrations feed ----
 const liveRegs = []; // {studentId, name, section, ts} — most recent first, in-memory for this session
-function courseOf(section){ return (section||'').split(' ')[0] || 'Unknown'; }
 function renderLiveRegs(){
   const feed = document.getElementById('liveFeed'), counts = document.getElementById('liveCounts');
   if(!feed || !counts) return;
@@ -388,6 +421,106 @@ async function maybeSync(){
 }
 function forceSync(){ log('Manual sync triggered'); maybeSync(); }
 
+// ---- per-table cloud wipe ----
+// Deliberately the mirror image of "Clear" on Flagged attempts (which only
+// touches the local cache): these buttons only touch Supabase and leave
+// this device's local passport/state alone. `col` just needs to be a
+// not-null column on that table so `.not(col,'is',null)` matches every row
+// — PostgREST requires *some* filter on delete, this isn't a real predicate.
+// booth_secrets is intentionally not in this list — see the note in the UI.
+const WIPE_TABLES = [
+  {key:'students', label:'Students', col:'student_id'},
+  {key:'stamps', label:'Stamps', col:'student_id'},
+  {key:'flagged_scans', label:'Flagged Scans', col:'id'},
+  {key:'skills_registrations', label:'Skills Reg', col:'student_id'},
+  {key:'checkins', label:'Entrance', col:'student_id'},
+  {key:'votes', label:'Votes', col:'student_id'},
+  {key:'sections', label:'Sections', col:'name'},
+];
+function renderWipeButtons(){
+  const el = document.getElementById('wipeButtons'); if(!el) return;
+  el.innerHTML = '';
+  WIPE_TABLES.forEach(t=>{
+    const btn = document.createElement('button');
+    btn.className = 'demo-booth-btn';
+    btn.textContent = t.label;
+    btn.onclick = ()=>wipeTable(t);
+    el.appendChild(btn);
+  });
+}
+async function doWipe(t){
+  const {error, count} = await sb.from(t.key).delete({count:'exact'}).not(t.col, 'is', null);
+  if(error) throw error;
+  log(`Wiped table: ${t.key}` + (count!=null ? ` (${count} row${count===1?'':'s'})` : ''));
+  if(t.key==='flagged_scans'){ cloudFlags.length = 0; renderFlags(); }
+  if(t.key==='skills_registrations'){ liveRegs.length = 0; renderLiveRegs(); }
+}
+async function wipeTable(t){
+  if(!sb){ showToast("Can't wipe — cloud backend not connected"); return; }
+  if(!confirm(`Delete ALL rows from "${t.key}" in the cloud database? This can't be undone.`)) return;
+  try{ await doWipe(t); showToast(`${t.label} table wiped`); }
+  catch(e){ log(`Wipe failed for ${t.key}: `+e.message); showToast('Wipe failed: '+e.message); }
+}
+async function wipeAllTables(){
+  if(!sb){ showToast("Can't wipe — cloud backend not connected"); return; }
+  if(!confirm('Delete ALL rows from EVERY table listed above? This can\'t be undone.')) return;
+  for(const t of WIPE_TABLES){
+    try{ await doWipe(t); } catch(e){ log(`Wipe failed for ${t.key}: `+e.message); }
+  }
+  showToast('All tables wiped');
+}
+
+// ---- mock data seeding ----
+// Deliberately reuses the exact same tables/columns as the real Registration
+// (index.html + skills.html) and real Voting (vote.html) flows — the point
+// is to exercise the same writes with throwaway data, not to fake numbers
+// client-side. Loaded from `sectionsList` (see loadSections in shared.js) so
+// mock registrations land in whatever sections are actually configured.
+let sectionsList = SECTIONS_FALLBACK; // replaced once loadSections() resolves in initSb()
+const MOCK_FIRST = ['Juan','Maria','Jose','Ana','Pedro','Liza','Carlo','Bea','Miguel','Sofia','Andres','Carmen','Paolo','Isabel','Ramon','Grace','Nico','Faith','Ella','Marco'];
+const MOCK_LAST = ['Dela Cruz','Santos','Reyes','Garcia','Torres','Ramos','Flores','Bautista','Mendoza','Castro','Rivera','Aquino','Villanueva','Cruz','Gonzales'];
+function mockName(){ return MOCK_FIRST[Math.floor(Math.random()*MOCK_FIRST.length)]+' '+MOCK_LAST[Math.floor(Math.random()*MOCK_LAST.length)]; }
+function mockStudentId(){
+  const yy = String(20 + Math.floor(Math.random()*6));
+  const num = String(1000 + Math.floor(Math.random()*9000));
+  return `${yy}-${num}`;
+}
+async function seedMockRegistrations(n){
+  if(!sb){ showToast("Can't seed — cloud backend not connected"); return; }
+  log(`Seeding ${n} mock registration(s)...`);
+  let ok = 0;
+  for(let i=0;i<n;i++){
+    const studentId = mockStudentId(), name = mockName();
+    const section = sectionsList[Math.floor(Math.random()*sectionsList.length)];
+    try{
+      const {error: e1} = await sb.from('students').upsert({student_id: studentId, name});
+      if(e1) throw e1;
+      const {error: e2} = await sb.from('skills_registrations').upsert({student_id: studentId, name, section});
+      if(e2) throw e2;
+      ok++;
+    }catch(e){ log(`Mock registration failed: ${e.message}`); }
+  }
+  log(`Seeded ${ok}/${n} mock registration(s)`);
+  showToast(`${ok} mock registration(s) added`);
+}
+async function seedMockVotes(n){
+  if(!sb){ showToast("Can't seed — cloud backend not connected"); return; }
+  log(`Seeding ${n} mock vote(s)...`);
+  let ok = 0;
+  for(let i=0;i<n;i++){
+    const studentId = mockStudentId();
+    const cat = VOTE_CATEGORIES[Math.floor(Math.random()*VOTE_CATEGORIES.length)];
+    const cand = cat.candidates[Math.floor(Math.random()*cat.candidates.length)];
+    try{
+      const {error} = await sb.from('votes').insert({student_id: studentId, category_id: cat.id, candidate_id: cand.id});
+      if(error && error.code !== '23505') throw error;
+      if(!error) ok++;
+    }catch(e){ log(`Mock vote failed: ${e.message}`); }
+  }
+  log(`Seeded ${ok}/${n} mock vote(s)`);
+  showToast(`${ok} mock vote(s) added`);
+}
+
 // ---- reset / recovery ----
 function recoverFromCloud(){
   if(!confirm('This clears local stamps and re-pulls from the cloud. Continue?')) return;
@@ -466,7 +599,7 @@ function addStamp(boothId, boothName, notSure){
 
 // ---- init ----
 initSb();
-renderWho(); renderNetStatus(); renderDemoButtons(); renderFlags(); renderLiveRegs();
+renderWho(); renderNetStatus(); renderDemoButtons(); renderFlags(); renderLiveRegs(); renderWipeButtons();
 window.addEventListener('online', ()=>{ if(!state.online){ state.online=true; saveState(state); renderNetStatus(); maybeSync(); } });
 window.addEventListener('offline', ()=>{ if(state.online){ state.online=false; saveState(state); renderNetStatus(); } });
 </script>

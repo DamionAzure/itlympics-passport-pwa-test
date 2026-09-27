@@ -1,6 +1,6 @@
-const CACHE_NAME = 'itlympics-passport-v11';
+const CACHE_NAME = 'itlympics-passport-v12';
 const APP_SHELL = [
-  './', './index.html', './booth.html', './testing.html', './skills.html', './entrance.html', './vote.html',
+  './', './index.html', './booth.html', './testing.html', './skills.html', './entrance.html', './vote.html', './dashboard.html',
   './shared.js', './shared.css',
   './vendor/jsQR.js', './vendor/qrcode.min.js',
   './manifest.json', './icon-192.png', './icon-512.png'

@@ -85,10 +85,13 @@ function validateStudentId(id){
   return null;
 }
 
-// ---- sections list (placeholder — swap for the registrar's real list) ----
-// Flat list of "COURSE YEAR-SECTION" strings so filtering is just a substring
-// match: typing "BSIT" narrows straight to that course's sections.
-const SECTIONS = [
+// ---- sections list ----
+// Lives in the `sections` table in Supabase (see Testing page SQL) so staff
+// can add, rename or remove sections from the dashboard without a redeploy.
+// SECTIONS_FALLBACK below is only used when there's no cloud connection at
+// all, or the table hasn't been created/seeded yet — same "graceful
+// degrade to local-only" pattern as everything else in this app.
+const SECTIONS_FALLBACK = [
   'BSIT 1-1','BSIT 1-2','BSIT 1-3','BSIT 2-1','BSIT 2-2','BSIT 2-3','BSIT 3-1','BSIT 3-2','BSIT 4-1','BSIT 4-2',
   'BSCS 1-1','BSCS 1-2','BSCS 2-1','BSCS 2-2','BSCS 3-1','BSCS 3-2','BSCS 4-1',
   'BSIS 1-1','BSIS 1-2','BSIS 2-1','BSIS 2-2','BSIS 3-1','BSIS 4-1',
@@ -97,6 +100,17 @@ const SECTIONS = [
   'BEED 1-1','BEED 2-1','BEED 3-1','BEED 4-1',
   'BSED 1-1','BSED 2-1','BSED 3-1','BSED 4-1',
 ];
+// Returns a flat array of "COURSE YEAR-SECTION" strings, same shape as the
+// fallback above, so callers don't care where the list came from.
+async function loadSections(sb){
+  if(!sb) return SECTIONS_FALLBACK;
+  try{
+    const {data, error} = await sb.from('sections').select('name').order('name');
+    if(error) throw error;
+    if(!data || !data.length) return SECTIONS_FALLBACK;
+    return data.map(r=>r.name);
+  }catch(e){ return SECTIONS_FALLBACK; }
+}
 
 // ---- Game Con voting categories (placeholder candidates — swap for the
 // real nominee lists once known; Best Booth reuses the existing BOOTHS list
@@ -113,6 +127,11 @@ const VOTE_CATEGORIES = [
   ]},
   {id:'best-booth', title:'Special GAMECON Award — Best Booth', candidates: BOOTHS.map(b=>({id:b.id, name:b.name}))},
 ];
+
+// First token of a "COURSE YEAR-SECTION" string, e.g. "BSIT 2-1" -> "BSIT".
+// Shared by Testing's live feed and the Dashboard's section breakdown so
+// grouping-by-course can't drift between the two.
+function courseOf(section){ return (section||'').split(' ')[0] || 'Unknown'; }
 
 // Wires a text input + a following <div class="combobox-list"> into a
 // type-to-filter picker. onPick(value) fires when an option is chosen.

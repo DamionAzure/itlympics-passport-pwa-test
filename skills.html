@@ -30,6 +30,7 @@
     <a href="entrance.html">Entrance</a>
     <a href="vote.html">Vote</a>
     <a href="testing.html">Testing</a>
+    <a href="dashboard.html">Dashboard</a>
   </nav>
 
   <div class="status-bar">
@@ -87,11 +88,13 @@ function renderNetStatus(){
 }
 
 let chosenSection = null;
+let sectionsList = SECTIONS_FALLBACK; // replaced once loadSections() resolves
 
-function initSectionBox(){
+async function initSectionBox(){
   const input = document.getElementById('skSection');
   const list = document.getElementById('skSectionList');
-  initCombobox(input, list, SECTIONS, (val)=>{ chosenSection = val; });
+  sectionsList = await loadSections(sb);
+  initCombobox(input, list, sectionsList, (val)=>{ chosenSection = val; });
 }
 
 // Prefills from the Passport registration (same student), and from any
@@ -116,7 +119,7 @@ async function submitSkillsReg(){
   if(!name || !studentId || !section){ showErr('Name, Student ID and Section are all required.'); return; }
   const nameErr = validateName(name); if(nameErr){ showErr(nameErr); return; }
   const idErr = validateStudentId(studentId); if(idErr){ showErr(idErr); return; }
-  if(!SECTIONS.includes(section)){ showErr('Pick a section from the list (type your course, e.g. "BSIT", to filter).'); return; }
+  if(!sectionsList.includes(section)){ showErr('Pick a section from the list (type your course, e.g. "BSIT", to filter).'); return; }
   clearErr();
 
   const reg = {name, studentId, section, savedAt: Date.now(), synced:false};
@@ -149,10 +152,10 @@ function editRegistration(){
 
 // ---- init ----
 function initSb(){ sb = initSupabase(cfg); if(sb){ const pending = loadSkillsReg(); if(pending && !pending.synced) submitSkillsReg(); } }
-initSectionBox();
 prefill();
 renderNetStatus();
 initSb();
+initSectionBox(); // after initSb() so it can pull the live list from Supabase
 window.addEventListener('online', ()=>{ state.online=true; saveState(state); renderNetStatus(); const pending=loadSkillsReg(); if(pending && !pending.synced && sb) submitSkillsReg(); });
 window.addEventListener('offline', ()=>{ state.online=false; saveState(state); renderNetStatus(); });
 if('serviceWorker' in navigator){ navigator.serviceWorker.register('service-worker.js').catch(e=>console.warn('SW registration failed', e)); }
