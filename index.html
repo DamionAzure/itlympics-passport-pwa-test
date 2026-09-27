@@ -188,12 +188,21 @@ async function pushOne(boothId){
     if(error) throw error;
     if(state.stamps[boothId]) state.stamps[boothId].receivedAt = (data && data.received_at) ? new Date(data.received_at).getTime() : Date.now();
     return true;
-  }catch(e){ log('Cloud write failed: '+e.message); return false; }
+  }catch(e){
+    log('Cloud write failed: '+e.message);
+    showToast('⚠️ Stamp not synced: '+e.message, true);
+    return false;
+  }
 }
 async function registerCloud(){
   if(!sb) return;
-  try{ await sb.from('students').upsert({student_id: state.studentId, name: state.name}); }
-  catch(e){ log('Cloud student upsert failed: '+e.message); }
+  try{
+    const {error} = await sb.from('students').upsert({student_id: state.studentId, name: state.name});
+    if(error) throw error;
+  }catch(e){
+    log('Cloud student upsert failed: '+e.message);
+    showToast('⚠️ Registered on this device only — cloud sync failed: '+e.message, true);
+  }
 }
 async function maybeSync(){
   renderNetStatus();

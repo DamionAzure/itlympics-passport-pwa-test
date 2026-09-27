@@ -133,7 +133,10 @@ async function submitSkillsReg(){
       reg.synced = true; saveSkillsReg(reg);
       showToast('Registered and synced to cloud');
     }catch(e){
-      showToast('Saved on this device — will sync once online', true);
+      // Real reason surfaced here — a silent "will sync once online" made a
+      // permanent failure (e.g. an RLS policy blocking the anon key) look
+      // identical to a temporary offline blip.
+      showToast('Saved on this device, cloud sync failed: '+e.message, true);
     }
   } else {
     showToast('Saved on this device (cloud not configured)');

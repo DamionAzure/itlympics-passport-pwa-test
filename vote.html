@@ -178,7 +178,7 @@ async function castVote(){
         myVotes[catId] = data ? data.candidate_id : candId;
         showToast('You already voted in this category', true);
       } else {
-        err.textContent = 'Could not reach the server — try again.';
+        err.textContent = 'Could not reach the server: '+error.message;
         err.style.display='block';
       }
     } else {
@@ -187,7 +187,7 @@ async function castVote(){
       showToast('Vote cast!');
     }
   }catch(e){
-    err.textContent = 'Could not reach the server — try again.';
+    err.textContent = 'Could not reach the server: '+e.message;
     err.style.display='block';
   }
   renderAll();

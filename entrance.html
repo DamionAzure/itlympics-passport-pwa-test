@@ -135,9 +135,14 @@ async function handleEntranceScan(text){
       }
     }catch(e){
       const q = loadQueue(); q.push(studentId); saveQueue(q); renderNetStatus();
+      // Surfaced immediately rather than left to look like a silent success —
+      // e.g. "new row violates row-level security policy" means the table's
+      // RLS is blocking anon writes; see the Testing page's Configure modal.
+      showToast('⚠️ Cloud write failed, queued locally: '+e.message, true);
     }
   } else {
     const q = loadQueue(); q.push(studentId); saveQueue(q); renderNetStatus();
+    if(!sb) showToast('⚠️ Not synced — cloud backend not connected', true);
   }
 }
 
