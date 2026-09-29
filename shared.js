@@ -17,6 +17,7 @@ const STORE_KEY = 'itlympics_passport_v1';
 const CFG_KEY = 'itlympics_supabase_cfg';
 const ROTATION_KEY = 'itlympics_rotation_v1';
 const FLAG_KEY = 'itlympics_flags_v1';
+const GEOFENCE_KEY = 'itlympics_geofence_v1';
 
 // ---- flagged scan attempts (expired / tampered codes) ----
 // Written to localStorage first (so flagging never depends on the venue wifi
@@ -78,6 +79,11 @@ function clearFlags(){ try{ localStorage.removeItem(FLAG_KEY); }catch(e){} }
 // ---- shared input validation (used by passport registration + skills registration) ----
 function validateName(name){
   if(!name || name.length < 2 || !/^[\p{L}][\p{L}\s.'-]*$/u.test(name)) return 'Name looks off — letters only, e.g. "Juan Dela Cruz".';
+  return null;
+}
+function validatePin(pin){
+  // Supabase Auth's minimum password length is 6 (its default), so a PIN is 6+ digits.
+  if(!/^\d{6,12}$/.test(pin||'')) return 'PIN must be 6–12 digits.';
   return null;
 }
 function validateStudentId(id){
@@ -178,8 +184,8 @@ function normalizeStamps(stamps){
   Object.keys(stamps||{}).forEach(id=>{
     const v = stamps[id];
     out[id] = (v && typeof v === 'object')
-      ? {scannedAt: v.scannedAt || Date.now(), receivedAt: v.receivedAt || null, notSure: !!v.notSure}
-      : {scannedAt: v || Date.now(), receivedAt: null, notSure: false}; // migrate old plain-timestamp shape
+      ? {scannedAt: v.scannedAt || Date.now(), receivedAt: v.receivedAt || null, notSure: !!v.notSure, pendingVerify: !!v.pendingVerify}
+      : {scannedAt: v || Date.now(), receivedAt: null, notSure: false, pendingVerify: false}; // migrate old plain-timestamp shape
   });
   return out;
 }
@@ -201,13 +207,150 @@ function saveState(state){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(s
 // wins over these defaults.
 const DEFAULT_SB_URL = 'https://pryiiaqubqdrcavxszax.supabase.co';
 const DEFAULT_SB_KEY = 'sb_publishable_-S7knesEIWoMVYUdkiEvCg_4KMgf55-';
+// pin: the staff-only PIN gating get_booth_seed (see below) — blank by
+// default, only ever set manually via the Booth/Testing Configure screen,
+// never baked in as a default like the URL/key are.
 function loadCfg(){
-  try{ const r = localStorage.getItem(CFG_KEY); if(r) return JSON.parse(r); }catch(e){}
-  return {url:DEFAULT_SB_URL, key:DEFAULT_SB_KEY};
+  const defaults = {url:DEFAULT_SB_URL, key:DEFAULT_SB_KEY, pin:''};
+  try{ const r = localStorage.getItem(CFG_KEY); if(r) return Object.assign(defaults, JSON.parse(r)); }catch(e){}
+  return defaults;
 }
 function saveCfg(cfg){ try{ localStorage.setItem(CFG_KEY, JSON.stringify(cfg)); }catch(e){} }
+let _sbClient = null, _sbClientKey = null;
 function initSupabase(cfg){
-  return (cfg.url && cfg.key && window.supabase) ? window.supabase.createClient(cfg.url, cfg.key) : null;
+  if(!(cfg.url && cfg.key && window.supabase)) return null;
+  const k = cfg.url + '|' + cfg.key;
+  if(_sbClient && _sbClientKey === k) return _sbClient; // one client (one auth instance) per page
+  _sbClient = window.supabase.createClient(cfg.url, cfg.key); _sbClientKey = k;
+  return _sbClient;
+}
+
+// ---- auth: Student ID + PIN on real Supabase Auth accounts ----
+// Every person — attendee, staff, admin — is a real Supabase Auth user, so
+// PINs are hashed by Supabase and sessions are signed JWTs. There's no email
+// anywhere in this app: we synthesize one from the Student ID (Auth needs
+// *some* unique identifier) and the PIN is the password. What a person may
+// DO is decided by the `role` on their `profiles` row and enforced by RLS in
+// the database (see the RBAC SQL on the Testing page) — the page-level gating
+// below only decides what to SHOW, so tampering with it in devtools can't
+// grant real access.
+//
+// One-time Supabase settings (Authentication > Providers > Email):
+//  - turn OFF "Confirm email" (these addresses can't receive mail)
+//  - minimum password length 6 or lower (Auth's default is 6)
+// If signup ever fails with "email address is invalid", change AUTH_DOMAIN.
+const AUTH_DOMAIN = 'itlympics.local';
+const ROLE_RANK = {user:1, staff:2, admin:3};
+function roleMeets(role, minRole){ return (ROLE_RANK[role]||0) >= (ROLE_RANK[minRole]||0); }
+function studentIdToEmail(studentId){ return studentId.trim().toLowerCase().replace(/\s+/g,'') + '@' + AUTH_DOMAIN; }
+
+// Does this Student ID already have an account? Asked BEFORE any PIN field
+// is shown, so the login page can offer "enter your PIN" vs "create one".
+// (account_exists is a security-definer function, callable while logged out.)
+async function accountExists(sb, studentId){
+  if(!sb) return {reason:"Can't check accounts — cloud backend not connected."};
+  try{
+    const {data, error} = await sb.rpc('account_exists', {p_student_id: studentId.trim()});
+    if(error) throw error;
+    return {exists: !!data};
+  }catch(e){ return {reason: "Couldn't check that ID: " + e.message + " (has the RBAC SQL been run?)"}; }
+}
+async function signInWithIdPin(sb, studentId, pin){
+  const {error} = await sb.auth.signInWithPassword({email: studentIdToEmail(studentId), password: pin});
+  if(!error) return {ok:true};
+  return {ok:false, reason: /invalid login credentials/i.test(error.message) ? 'Incorrect PIN.' : error.message};
+}
+async function signUpWithIdPin(sb, studentId, name, pin){
+  const {data, error} = await sb.auth.signUp({
+    email: studentIdToEmail(studentId), password: pin,
+    options: {data: {student_id: studentId.trim(), name: (name||'').trim()}}
+  });
+  if(error){
+    if(/already registered|already been registered/i.test(error.message)) return {ok:false, reason:'That Student ID already has a login — go back and enter your PIN.'};
+    return {ok:false, reason: error.message};
+  }
+  if(!data.session) return {ok:false, reason:'Account created but not logged in — turn OFF "Confirm email" in Supabase (Authentication > Providers > Email), then log in.'};
+  return {ok:true};
+}
+
+// The last verified profile is cached so a device that's gone offline (venue
+// wifi drops) isn't locked out of pages meant to keep working offline — the
+// Entrance queue, the cached-seed Booth Display, the offline Passport. This
+// only affects what the UI shows; RLS checks the real session on every write.
+const PROFILE_KEY = 'itlympics_profile_v1';
+function loadCachedProfile(){ try{ const r = localStorage.getItem(PROFILE_KEY); if(r) return JSON.parse(r); }catch(e){} return null; }
+function saveCachedProfile(p){ try{ localStorage.setItem(PROFILE_KEY, JSON.stringify(p)); }catch(e){} }
+async function authSignOut(sb){
+  try{ localStorage.removeItem(PROFILE_KEY); }catch(e){}
+  try{ if(sb) await sb.auth.signOut(); }catch(e){}
+  // If the sign-out call couldn't reach the server (offline), make sure the
+  // stored session is gone anyway rather than leaving this device logged in.
+  try{ Object.keys(localStorage).filter(k=>/^sb-.*-auth-token$/.test(k)).forEach(k=>localStorage.removeItem(k)); }catch(e){}
+}
+// {student_id, name, role} for the current session, or null. Falls back to
+// the cached profile only when the failure was the NETWORK (offline / fetch
+// failed) — a real database answer, like "no such profile", is never overridden.
+async function fetchMyProfile(sb){
+  if(!sb) return null;
+  try{
+    const {data:{user}} = await sb.auth.getUser();
+    if(!user) return null;
+    const {data, error} = await sb.from('profiles').select('student_id, name, role').eq('user_id', user.id).single();
+    if(error) throw error;
+    saveCachedProfile(data);
+    return data;
+  }catch(e){
+    const networkFailure = navigator.onLine===false || !(e && (e.code || e.status));
+    return networkFailure ? loadCachedProfile() : null;
+  }
+}
+
+// ---- roles: ONE login for everything, pages unlock by role ----
+// user < staff < admin, each role gets everything below it. login.html is the
+// only place anyone logs in or registers; every other page is guarded by the
+// block at the bottom of this file. Testing is staff+: the destructive tools
+// on it are admin-only, enforced by the database (RLS), not just hidden.
+const PAGE_ROLE = {
+  'index.html':'user', 'skills.html':'user', 'vote.html':'user',
+  'booth.html':'staff', 'entrance.html':'staff', 'dashboard.html':'staff', 'testing.html':'staff'
+};
+const ROLE_HOME = {user:'index.html', staff:'dashboard.html', admin:'dashboard.html'};
+function currentPage(){ return location.pathname.split('/').pop() || 'index.html'; }
+function canOpen(role, page){ const need = PAGE_ROLE[page]; return !!need && roleMeets(role, need); }
+function goToLogin(page, denied){
+  document.documentElement.style.display = 'none'; // no flash of a page you can't use
+  location.replace('login.html?next=' + encodeURIComponent(page) + (denied ? '&denied=1' : ''));
+}
+async function signOut(){
+  const st = loadState();
+  if(st.pendingSync && st.pendingSync.length &&
+     !confirm(`${st.pendingSync.length} stamp(s) on this device haven't synced yet. Logging out now will lose them. Log out anyway?`)) return;
+  await authSignOut(initSupabase(loadCfg()));
+  saveState({name:null, studentId:null, stamps:{}, pendingSync:[], online:st.online});
+  location.replace('login.html');
+}
+function applyRoleNav(profile){
+  const nav = document.querySelector('.pagenav'); if(!nav) return;
+  nav.querySelectorAll('a').forEach(a=>{
+    const page = (a.getAttribute('href')||'').split('/').pop();
+    if(PAGE_ROLE[page] && !canOpen(profile.role, page)) a.remove();
+  });
+  const out = document.createElement('a');
+  out.href = '#'; out.textContent = 'Log out'; out.style.marginLeft = 'auto';
+  out.onclick = e => { e.preventDefault(); signOut(); };
+  nav.appendChild(out);
+}
+
+// Resolves to the verified profile once this page's guard passes (never, if
+// the guard redirected away). Pages hook their startup onto this.
+let authReady = Promise.resolve(null);
+// Kept so pages can say "start once a user with at least minRole is in" —
+// the guard has already enforced the page's own minimum by then.
+function mountAuthGate(sb, opts){
+  opts = opts || {};
+  return authReady.then(profile=>{
+    if(profile && roleMeets(profile.role, opts.minRole||'user') && opts.onReady) opts.onReady(profile);
+  });
 }
 
 // ---- Supabase Realtime ----
@@ -232,34 +375,215 @@ function saveRotation(seconds){
   try{ localStorage.setItem(ROTATION_KEY, String(Math.max(5, parseInt(seconds)||30))); }catch(e){}
 }
 
-// ---- rotating code: generated and verified server-side via Supabase RPC ----
+// ---- rotating code: generated and verified server-side via Supabase RPC,
+// with a cached-seed fallback for offline booth devices ----
 // The per-booth secrets and the HMAC/grace-period math used to live here on
 // the client (see git history) — that meant anyone reading this public repo
 // could compute a valid code for any booth without ever showing up. They now
-// live only in the `booth_secrets` table, readable by nobody, and the two
-// Postgres functions below (`generate_booth_code`, `validate_booth_code`) do
-// the same HMAC + grace-period check the old client code did, but on the
-// server. See the SQL schema (Testing page) for the exact logic and the
-// grace-period rationale.
+// live only in the `booth_secrets` table, readable by nobody directly, and
+// the Postgres functions below do the same HMAC + grace-period check the old
+// client code did, but on the server. See the SQL schema (Testing page) for
+// the exact logic and the grace-period rationale.
 //
-// Trade-off: unlike the rest of this app, generating and validating a booth
-// code now requires a live Supabase connection — there's no local-only
-// fallback for this one piece. Booth devices are expected to stay on venue
-// wifi; if an attendee's phone is offline when they scan, the scan simply
-// can't be verified until they're back online.
-async function generateBoothCode(sb, boothId, rotationSeconds){
+// Offline fallback: `get_booth_seed` (staff-PIN gated — see the SQL) lets a
+// *booth* device pull its own booth's secret while it has a connection and
+// cache it locally, so it can keep computing valid rotating codes with the
+// same HMAC math if venue wifi drops. This only ever caches the one booth
+// that device is displaying for, and only a device that knows the staff PIN
+// can fetch it — but be clear-eyed that anyone who extracts that PIN (or a
+// cached seed off a booth device) could forge codes for that booth without
+// showing up, same risk as the original client-side version, just scoped to
+// one booth instead of all six. There's no way around that and still have
+// codes generate with zero connection.
+const SEED_KEY = 'itlympics_booth_seeds_v1';
+function loadSeeds(){
+  try{ const r = localStorage.getItem(SEED_KEY); if(r) return JSON.parse(r); }catch(e){}
+  return {};
+}
+function loadBoothSeed(boothId){ const s = loadSeeds()[boothId]; return s ? s.secret : null; }
+function loadBoothSeedInfo(boothId){ return loadSeeds()[boothId] || null; } // {secret, fetchedAt}
+function saveBoothSeed(boothId, secret){
+  const seeds = loadSeeds();
+  seeds[boothId] = {secret, fetchedAt: Date.now()};
+  try{ localStorage.setItem(SEED_KEY, JSON.stringify(seeds)); }catch(e){}
+}
+// staffPin: no longer used (kept as an accepted-but-ignored 3rd arg so old
+// call sites don't break) — access is now checked server-side against the
+// caller's real logged-in role (see get_booth_seed's SQL), same as
+// everything else post-RBAC.
+async function fetchBoothSeed(sb, boothId){
   if(!sb) return null;
-  const {data, error} = await sb.rpc('generate_booth_code', {p_booth_id: boothId, p_rotation_seconds: rotationSeconds});
-  if(error){ console.error('generate_booth_code failed', error); return null; }
-  return data;
+  try{
+    const {data, error} = await sb.rpc('get_booth_seed', {p_booth_id: boothId});
+    if(error) throw error;
+    if(data){ saveBoothSeed(boothId, data); return data; }
+    return null; // not staff/admin, or booth_secrets has no row for this booth
+  }catch(e){ console.error('get_booth_seed failed', e); return null; }
 }
-async function validateBoothCode(sb, text, rotationSeconds){
+function boothWindowId(rotationSeconds, atMs){ return Math.floor((atMs===undefined?Date.now():atMs)/1000 / rotationSeconds); }
+async function hmacSha256Hex(secret, message){
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), {name:'HMAC', hash:'SHA-256'}, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message));
+  return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+// Mirrors generate_booth_code's SQL exactly: same window math, same
+// "hmac(booth_id:window, secret) -> first 10 hex chars" shape.
+async function computeBoothCodeLocal(boothId, secret, rotationSeconds){
+  const windowId = boothWindowId(rotationSeconds);
+  const hex = await hmacSha256Hex(secret, boothId+':'+windowId);
+  return 'BOOTH:'+boothId+':'+windowId+':'+hex.slice(0,10);
+}
+// Returns {code, offline}. Tries the live RPC first (and, on success,
+// opportunistically refreshes the cached seed for next time offline). Falls
+// back to a locally-computed code from the last cached seed when there's no
+// connection, the RPC fails, or no sb at all — code is null if that fails
+// too (never online yet, or no staff PIN was ever entered on this device).
+async function generateBoothCode(sb, boothId, rotationSeconds){
+  if(sb){
+    try{
+      const {data, error} = await sb.rpc('generate_booth_code', {p_booth_id: boothId, p_rotation_seconds: rotationSeconds});
+      if(error) throw error;
+      if(data){ fetchBoothSeed(sb, boothId); return {code:data, offline:false}; }
+    }catch(e){ console.error('generate_booth_code failed, falling back to cached seed', e); }
+  }
+  const secret = loadBoothSeed(boothId);
+  if(!secret) return {code:null, offline:true};
+  return {code: await computeBoothCodeLocal(boothId, secret, rotationSeconds), offline:true};
+}
+// Returns {ok, reason, notSure, booth, offline?}. `offline:true` marks the
+// two cases where we simply couldn't reach the server to check the
+// signature (no client, or the RPC call itself failed) — as opposed to a
+// case where the server *did* check it and said no. Callers (e.g.
+// index.html's handleScannedText) can treat `offline` results differently
+// from a genuine rejection: a well-formed code for a real booth, scanned
+// while offline, is safe to accept-and-queue rather than block, since it
+// can't be told apart from a real one without a connection anyway.
+async function validateBoothCode(sb, text, rotationSeconds, lat, lng){
   if(!text || !text.startsWith('BOOTH:')) return {ok:false, reason:'Not a booth code'};
-  if(!sb) return {ok:false, reason:"Can't verify right now — cloud backend not connected"};
-  const {data, error} = await sb.rpc('validate_booth_code', {p_code: text, p_rotation_seconds: rotationSeconds});
-  if(error){ console.error('validate_booth_code failed', error); return {ok:false, reason:'Verification failed — try again'}; }
+  const parts = text.split(':');
+  const booth = parts.length===4 ? BOOTHS.find(b=>b.id===parts[1]) : undefined;
+  if(!sb) return {ok:false, offline:true, reason:"Can't verify right now — cloud backend not connected", booth};
+  let data, error;
+  try{ ({data, error} = await sb.rpc('validate_booth_code', {p_code: text, p_rotation_seconds: rotationSeconds, p_lat: lat ?? null, p_lng: lng ?? null})); }
+  catch(e){ error = e; }
+  if(error){
+    console.error('validate_booth_code failed', error);
+    return {ok:false, offline:true, reason:'Verification failed — no connection', booth};
+  }
   const row = Array.isArray(data) ? data[0] : data;
-  if(!row) return {ok:false, reason:'Verification failed — try again'};
-  const booth = row.booth_id ? BOOTHS.find(b=>b.id===row.booth_id) : undefined;
-  return {ok:row.ok, reason:row.reason, notSure:row.not_sure, booth};
+  if(!row) return {ok:false, reason:'Verification failed — try again', booth};
+  const rowBooth = row.booth_id ? BOOTHS.find(b=>b.id===row.booth_id) : booth;
+  return {ok:row.ok, reason:row.reason, notSure:row.not_sure, booth:rowBooth};
 }
+
+// ---- geofence (campus-only scanning) ----
+// Lives in the public `event_settings` table (not app_config — that one's
+// locked down for the staff PIN, see get_booth_seed) so every attendee's
+// phone can read it directly with no gate: enabled/lat/lng/radius aren't
+// secrets, and index.html needs to check them before every scan. Turning
+// this on/off is a single row update from the Testing page's Geofence
+// panel — no redeploy, same pattern as the rotation interval — specifically
+// so it can ship OFF while the app's still being built/tested away from
+// campus, then get flipped on once staff are actually on-site.
+// Cached locally (like the booth seed) so a device that's gone offline
+// keeps enforcing whatever it last saw online rather than silently
+// reverting to "off".
+const GEOFENCE_DEFAULT = {enabled:false, lat:14.6940301, lng:120.969399, radiusM:250};
+function loadGeofenceCfg(){
+  try{ const r = localStorage.getItem(GEOFENCE_KEY); if(r) return Object.assign({}, GEOFENCE_DEFAULT, JSON.parse(r)); }catch(e){}
+  return GEOFENCE_DEFAULT;
+}
+function saveGeofenceCfg(cfg){ try{ localStorage.setItem(GEOFENCE_KEY, JSON.stringify(cfg)); }catch(e){} }
+async function fetchGeofenceCfg(sb){
+  if(!sb) return loadGeofenceCfg();
+  try{
+    const {data, error} = await sb.from('event_settings').select('key, value')
+      .in('key', ['geofence_enabled','geofence_lat','geofence_lng','geofence_radius_m']);
+    if(error) throw error;
+    const map = {}; (data||[]).forEach(r=>map[r.key]=r.value);
+    const cfg = {
+      enabled: map.geofence_enabled === 'true',
+      lat: parseFloat(map.geofence_lat),
+      lng: parseFloat(map.geofence_lng),
+      radiusM: parseFloat(map.geofence_radius_m),
+    };
+    if(Number.isNaN(cfg.lat) || Number.isNaN(cfg.lng) || Number.isNaN(cfg.radiusM)) return loadGeofenceCfg();
+    saveGeofenceCfg(cfg);
+    return cfg;
+  }catch(e){ console.error('fetchGeofenceCfg failed, using cached value', e); return loadGeofenceCfg(); }
+}
+// Writing goes through this RPC instead of a direct table write — it's
+// admin-only server-side (see set_event_setting's SQL), checked against
+// the caller's real logged-in role, not a shared PIN.
+async function setEventSetting(sb, key, value){
+  if(!sb) return false;
+  try{
+    const {data, error} = await sb.rpc('set_event_setting', {p_key:key, p_value:String(value)});
+    if(error) throw error;
+    return !!data;
+  }catch(e){ console.error('set_event_setting failed', e); return false; }
+}
+// Admin-only (checked server-side, same pattern as set_event_setting).
+async function setUserRole(sb, studentId, role){
+  if(!sb) return false;
+  try{
+    const {data, error} = await sb.rpc('set_user_role', {p_student_id: studentId, p_role: role});
+    if(error) throw error;
+    return !!data;
+  }catch(e){ console.error('set_user_role failed', e); return false; }
+}
+function haversineMeters(lat1, lng1, lat2, lng2){
+  const R = 6371000, toRad = d=>d*Math.PI/180;
+  const dLat = toRad(lat2-lat1), dLng = toRad(lng2-lng1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+function getPosition(timeoutMs){
+  return new Promise((resolve, reject)=>{
+    if(!navigator.geolocation){ reject(new Error('Geolocation not supported on this device/browser')); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve(pos.coords),
+      err => reject(err),
+      {enableHighAccuracy:true, timeout: timeoutMs||10000, maximumAge:15000}
+    );
+  });
+}
+// Returns {ok, skipped, distanceM?, lat?, lng?, reason?}. skipped:true means
+// the geofence is off — ok:true in that case means "not checked", not
+// "confirmed on campus". Works fully offline: GPS itself needs no
+// connection, only the enabled/lat/lng/radius values (cached) do.
+async function checkGeofence(geoCfg){
+  if(!geoCfg || !geoCfg.enabled) return {ok:true, skipped:true};
+  let coords;
+  try{ coords = await getPosition(); }
+  catch(e){ return {ok:false, skipped:false, reason:'Location unavailable — enable location access for this site and try again'}; }
+  const distanceM = haversineMeters(coords.latitude, coords.longitude, geoCfg.lat, geoCfg.lng);
+  if(distanceM > geoCfg.radiusM){
+    return {ok:false, skipped:false, distanceM, reason:`You're about ${Math.round(distanceM)}m from campus — get within ${geoCfg.radiusM}m to scan`};
+  }
+  return {ok:true, skipped:false, distanceM, lat:coords.latitude, lng:coords.longitude};
+}
+
+// ---- page guard: runs as soon as this file loads, before the page's own script ----
+(function pageGuard(){
+  const page = currentPage();
+  const need = PAGE_ROLE[page];
+  if(!need) return; // login.html etc. have no requirement
+  document.documentElement.style.visibility = 'hidden'; // hidden until the check passes
+  authReady = (async ()=>{
+    const sb = initSupabase(loadCfg());
+    let profile = null;
+    if(sb){
+      let session = null;
+      try{ ({data:{session}} = await sb.auth.getSession()); }catch(e){}
+      if(session) profile = await fetchMyProfile(sb);
+      else if(navigator.onLine===false) profile = loadCachedProfile();
+    } else if(navigator.onLine===false){ profile = loadCachedProfile(); }
+    if(!profile){ goToLogin(page, false); return new Promise(()=>{}); }
+    if(!roleMeets(profile.role, need)){ goToLogin(page, true); return new Promise(()=>{}); }
+    document.documentElement.style.visibility = '';
+    applyRoleNav(profile);
+    return profile;
+  })();
+})();

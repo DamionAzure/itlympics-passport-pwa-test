@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F3A5F">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>ITLympics Login</title>
+<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="shared.css">
+<script src="vendor/supabase.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <p class="eyebrow">ITLympics 2027</p>
+      <h1 class="stamp-font">Login</h1>
+    </div>
+  </header>
+
+  <!-- Shown instead of the form when someone who's already logged in lands
+       here because the page they tried needs a higher role. -->
+  <div id="deniedView" class="card" style="display:none;">
+    <p id="deniedMsg" style="margin-top:0;font-size:14px;"></p>
+    <button class="btn-primary" onclick="goHome()">Go to my pages</button>
+    <button class="btn-ghost" style="width:100%;margin-top:8px;" onclick="signOut()">Log in as someone else</button>
+  </div>
+
+  <div id="formView" class="card">
+    <!-- Step 1: Student ID only. The PIN field isn't on screen until the
+         server says whether this ID already has an account (enter your
+         PIN) or not (create one) — the client never guesses that itself. -->
+    <div id="step1">
+      <label for="idInput">Student ID</label>
+      <input type="text" id="idInput" placeholder="23-0123" autocomplete="username">
+      <p class="err" id="err1" style="display:none;"></p>
+      <button class="btn-primary" id="continueBtn" onclick="continueLogin()">Continue</button>
+    </div>
+
+    <div id="step2" style="display:none;">
+      <p id="greeting" style="font-size:14px;margin:0 0 10px;"></p>
+
+      <div id="loginFields" style="display:none;">
+        <label for="pinInput">PIN</label>
+        <input type="password" id="pinInput" inputmode="numeric" autocomplete="current-password" maxlength="12" placeholder="••••••">
+        <button class="btn-primary" id="loginBtn" onclick="submitLogin()">Log in</button>
+      </div>
+
+      <div id="registerFields" style="display:none;">
+        <label for="nameInput">Full name</label>
+        <input type="text" id="nameInput" placeholder="Juan Dela Cruz" autocomplete="name">
+        <label for="newPinInput">Choose a PIN (6–12 digits)</label>
+        <input type="password" id="newPinInput" inputmode="numeric" autocomplete="new-password" maxlength="12" placeholder="••••••">
+        <label for="confirmPinInput">Confirm PIN</label>
+        <input type="password" id="confirmPinInput" inputmode="numeric" autocomplete="new-password" maxlength="12" placeholder="••••••">
+        <button class="btn-primary" id="registerBtn" onclick="submitRegister()">Create login</button>
+      </div>
+
+      <p class="err" id="err2" style="display:none;"></p>
+      <button class="btn-ghost" style="width:100%;margin-top:8px;" onclick="backToStep1()">Use a different Student ID</button>
+    </div>
+  </div>
+
+  <p class="demo-note">New here? Enter your Student ID and you'll be asked to set a PIN. Staff and admin access is granted by an admin — once you're logged in, the pages your role can open unlock automatically.</p>
+
+</div>
+
+<script src="shared.js"></script>
+<script>
+const cfg = loadCfg();
+const sb = initSupabase(cfg);
+let pendingId = null;
+
+const params = new URLSearchParams(location.search);
+const nextPage = params.get('next');
+const denied = params.get('denied');
+
+// `next` comes from the URL, so only ever land on a page this role can open.
+function destination(role){ return (nextPage && canOpen(role, nextPage)) ? nextPage : ROLE_HOME[role]; }
+async function goHome(){
+  const p = await fetchMyProfile(sb);
+  location.replace(p ? ROLE_HOME[p.role] : 'login.html');
+}
+// A different person logging in on a device that still holds someone else's
+// local passport must not inherit it — their own stamps come back from the
+// cloud by student_id.
+function finish(profile){
+  const st = loadState();
+  if(st.studentId && st.studentId !== profile.student_id){
+    saveState({name:null, studentId:null, stamps:{}, pendingSync:[], online:st.online});
+  }
+  location.replace(destination(profile.role));
+}
+async function finishFromSession(){
+  const profile = await fetchMyProfile(sb);
+  if(!profile){ showErr2('Logged in, but your account profile could not be loaded — try again.'); return; }
+  finish(profile);
+}
+
+const show = (id,msg)=>{ const e=document.getElementById(id); e.textContent=msg; e.style.display='block'; };
+const hide = id=>{ document.getElementById(id).style.display='none'; };
+const showErr1 = m=>show('err1',m), showErr2 = m=>show('err2',m);
+function busy(btnId, on, label){ const b=document.getElementById(btnId); b.disabled=on; if(label) b.textContent = on ? 'Checking…' : label; }
+
+async function continueLogin(){
+  const id = document.getElementById('idInput').value.trim();
+  const idErr = validateStudentId(id);
+  if(idErr){ showErr1(idErr); return; }
+  if(!sb){ showErr1("Can't check accounts right now — cloud backend not connected. Try again once you're online."); return; }
+  hide('err1'); busy('continueBtn', true, 'Continue');
+
+  const res = await accountExists(sb, id);
+  busy('continueBtn', false, 'Continue');
+  if(res.reason){ showErr1(res.reason); return; }
+
+  pendingId = id;
+  hide('step1'); document.getElementById('step2').style.display='block'; hide('err2');
+  if(res.exists){
+    document.getElementById('greeting').textContent = 'Welcome back — enter your PIN.';
+    document.getElementById('loginFields').style.display='block';
+    document.getElementById('registerFields').style.display='none';
+    const pinEl = document.getElementById('pinInput'); pinEl.value=''; pinEl.focus();
+  } else {
+    document.getElementById('greeting').textContent = 'New here — set up your login.';
+    document.getElementById('loginFields').style.display='none';
+    document.getElementById('registerFields').style.display='block';
+    ['nameInput','newPinInput','confirmPinInput'].forEach(i=>document.getElementById(i).value='');
+    document.getElementById('nameInput').focus();
+  }
+}
+function backToStep1(){
+  hide('step2'); document.getElementById('step1').style.display='block';
+  pendingId = null; hide('err2');
+}
+async function submitLogin(){
+  const pin = document.getElementById('pinInput').value.trim();
+  const pinErr = validatePin(pin); if(pinErr){ showErr2(pinErr); return; }
+  hide('err2'); busy('loginBtn', true, 'Log in');
+  const res = await signInWithIdPin(sb, pendingId, pin);
+  if(!res.ok){ busy('loginBtn', false, 'Log in'); showErr2(res.reason); return; }
+  await finishFromSession();
+  busy('loginBtn', false, 'Log in');
+}
+async function submitRegister(){
+  const name = document.getElementById('nameInput').value.trim();
+  const pin = document.getElementById('newPinInput').value.trim();
+  const confirmPin = document.getElementById('confirmPinInput').value.trim();
+  const nameErr = validateName(name); if(nameErr){ showErr2(nameErr); return; }
+  const pinErr = validatePin(pin); if(pinErr){ showErr2(pinErr); return; }
+  if(pin !== confirmPin){ showErr2("PINs don't match."); return; }
+  hide('err2'); busy('registerBtn', true, 'Create login');
+  const res = await signUpWithIdPin(sb, pendingId, name, pin);
+  if(!res.ok){ busy('registerBtn', false, 'Create login'); showErr2(res.reason); return; }
+  await finishFromSession();
+  busy('registerBtn', false, 'Create login');
+}
+// Enter submits whichever step is showing.
+document.addEventListener('keydown', e=>{
+  if(e.key !== 'Enter') return;
+  if(document.getElementById('step1').style.display !== 'none') continueLogin();
+  else if(document.getElementById('loginFields').style.display === 'block') submitLogin();
+});
+
+// ---- init ----
+(async function init(){
+  if(sb){
+    let session = null;
+    try{ ({data:{session}} = await sb.auth.getSession()); }catch(e){}
+    const profile = session ? await fetchMyProfile(sb) : (navigator.onLine===false ? loadCachedProfile() : null);
+    if(profile){
+      if(denied){
+        const need = PAGE_ROLE[nextPage] || 'a higher';
+        document.getElementById('deniedMsg').textContent =
+          `You're logged in as ${profile.name || profile.student_id} (${profile.role}). That page needs ${need} access.`;
+        document.getElementById('deniedView').style.display='block';
+        document.getElementById('formView').style.display='none';
+      } else {
+        finish(profile); // already logged in — skip the form
+      }
+      return;
+    }
+  }
+  const st = loadState();
+  if(st.studentId) document.getElementById('idInput').value = st.studentId;
+})();
+if('serviceWorker' in navigator){ navigator.serviceWorker.register('service-worker.js').catch(e=>console.warn('SW registration failed', e)); }
+</script>
+</body>
+</html>

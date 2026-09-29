@@ -12,7 +12,7 @@
 <title>ITLympics Skills Registration</title>
 <link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="shared.css">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="vendor/supabase.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -37,7 +37,9 @@
     <div><span class="dot" id="netDot"></span><span id="netLabel">Venue wifi: checking...</span></div>
   </div>
 
-  <div id="formView" class="card">
+  <div id="authGate"></div>
+
+  <div id="formView" class="card" style="display:none;">
     <p style="font-size:13px;color:var(--text-muted);margin-top:0;">Register for a Skills event. Student ID doubles as your passport ID — if you've already registered on the Passport page, it's pre-filled below.</p>
 
     <label for="skName">Full name</label>
@@ -154,11 +156,23 @@ function editRegistration(){
 }
 
 // ---- init ----
-function initSb(){ sb = initSupabase(cfg); if(sb){ const pending = loadSkillsReg(); if(pending && !pending.synced) submitSkillsReg(); } }
-prefill();
+// Logged-in user's Student ID/name are locked in (staff/admin can still
+// register on someone's behalf — the server-side policy allows "own record
+// OR staff+"). The form stays hidden until the gate says we're good.
+function onLoggedIn(profile){
+  if(!state.studentId || state.studentId !== profile.student_id){ state.studentId = profile.student_id; state.name = profile.name || profile.student_id; saveState(state); }
+  prefill();
+  if(!roleMeets(profile.role, 'staff')){
+    document.getElementById('skId').value = profile.student_id; document.getElementById('skId').readOnly = true;
+    if(profile.name){ document.getElementById('skName').value = profile.name; }
+  }
+  if(!loadSkillsReg()) document.getElementById('formView').style.display='block';
+  if(sb){ const pending = loadSkillsReg(); if(pending && !pending.synced) submitSkillsReg(); }
+}
+function initSb(){ sb = initSupabase(cfg); mountAuthGate(sb, {containerId:'authGate', minRole:'user', signupName:true, onReady:onLoggedIn}); }
 renderNetStatus();
 initSb();
-initSectionBox(); // after initSb() so it can pull the live list from Supabase
+initSectionBox(); // pulls the live list from Supabase (sections are publicly readable)
 window.addEventListener('online', ()=>{ state.online=true; saveState(state); renderNetStatus(); const pending=loadSkillsReg(); if(pending && !pending.synced && sb) submitSkillsReg(); });
 window.addEventListener('offline', ()=>{ state.online=false; saveState(state); renderNetStatus(); });
 if('serviceWorker' in navigator){ navigator.serviceWorker.register('service-worker.js').catch(e=>console.warn('SW registration failed', e)); }

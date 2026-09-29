@@ -1,8 +1,8 @@
-const CACHE_NAME = 'itlympics-passport-v13';
+const CACHE_NAME = 'itlympics-passport-v22';
 const APP_SHELL = [
-  './', './index.html', './booth.html', './testing.html', './skills.html', './entrance.html', './vote.html', './dashboard.html',
+  './', './login.html', './index.html', './booth.html', './testing.html', './skills.html', './entrance.html', './vote.html', './dashboard.html',
   './shared.js', './shared.css',
-  './vendor/jsQR.js', './vendor/qrcode.min.js',
+  './vendor/jsQR.js', './vendor/qrcode.min.js', './vendor/supabase.js',
   './manifest.json', './icon-192.png', './icon-512.png'
 ];
 
@@ -31,11 +31,13 @@ self.addEventListener('fetch', (event) => {
 
   if (isSameOrigin) {
     event.respondWith(
-      caches.match(req).then((cached) => {
+      // ignoreSearch: guarded pages redirect to login.html?next=…, which must
+      // still resolve to the cached login.html when offline.
+      caches.match(req, {ignoreSearch: true}).then((cached) => {
         const network = fetch(req).then((res) => {
           if (res && res.ok) caches.open(CACHE_NAME).then((c) => c.put(req, res.clone()));
           return res;
-        }).catch(() => cached);
+        }).catch(() => cached || new Response('Offline', {status: 503}));
         return cached || network;
       })
     );

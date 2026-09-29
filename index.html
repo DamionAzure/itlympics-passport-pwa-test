@@ -19,12 +19,14 @@
      gracefully to local-only mode if window.supabase never loads. -->
 <script src="vendor/jsQR.js"></script>
 <script src="vendor/qrcode.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="vendor/supabase.js"></script>
 <style>
   .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
   .stamp-slot{aspect-ratio:1;border:2px dashed var(--line);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:6px;position:relative;overflow:hidden;}
   .stamp-slot.filled{border:2px solid var(--amber);background:color-mix(in srgb, var(--amber) 10%, transparent);}
   .stamp-slot.not-sure{border-color:var(--danger);}
+  .stamp-slot.pending-verify{border-color:var(--amber);}
+  .pending-ribbon{position:absolute;top:9px;left:-30px;width:110px;transform:rotate(-45deg);background:var(--amber);color:#fff;font-size:9px;font-weight:700;letter-spacing:.03em;text-align:center;padding:2px 0;box-shadow:0 1px 3px rgba(0,0,0,.3);}
   .stamp-slot .name{font-size:11px;color:var(--text-muted);}
   .stamp-slot.filled .name{color:var(--ink);font-weight:500;}
   .stamp-mark{font-family:"Special Elite",monospace;color:var(--amber);font-size:13px;border:2px solid var(--amber);border-radius:6px;padding:2px 6px;transform:rotate(-8deg);margin-top:4px;}
@@ -61,14 +63,7 @@
     <a href="dashboard.html">Dashboard</a>
   </nav>
 
-  <div id="regView" class="card">
-    <label for="nameInput">Full name</label>
-    <input type="text" id="nameInput" placeholder="Juan Dela Cruz">
-    <label for="idInput">Student ID</label>
-    <input type="text" id="idInput" placeholder="23-0123">
-    <p class="err" id="regErr">Enter your name and student ID to register.</p>
-    <button class="btn-primary" onclick="register()">Register</button>
-  </div>
+  <div id="authGate"></div>
 
   <div id="mainView" style="display:none;">
 
@@ -131,6 +126,7 @@
 <script>
 let state = loadState(), cfg = loadCfg(), sb = null;
 let scanning=false, videoStream=null, rafId=null;
+let geoCfg = loadGeofenceCfg(); // cached value first (works instantly, even offline)
 
 function log(msg){ console.log('[passport]', msg); }
 
@@ -143,7 +139,7 @@ function showToast(msg, warn){
 }
 
 // ---- Supabase (cloud backend) ----
-function initSb(){ sb = initSupabase(cfg); renderCloudStatus(); }
+function initSb(){ sb = initSupabase(cfg); renderCloudStatus(); if(sb) fetchGeofenceCfg(sb).then(c=>geoCfg=c); }
 function renderCloudStatus(){
   const el = document.getElementById('cloudLabel');
   if(el) el.textContent = sb ? 'Cloud backend: connected' : 'Cloud backend: not configured';
@@ -171,11 +167,11 @@ function closeBadgeQr(){ document.getElementById('qrModal').style.display='none'
 async function pullFromCloud(){
   if(!sb || !state.studentId) return;
   try{
-    const {data, error} = await sb.from('stamps').select('booth_id, received_at').eq('student_id', state.studentId);
+    const {data, error} = await sb.from('stamps').select('booth_id, received_at, verified').eq('student_id', state.studentId);
     if(error) throw error;
     (data||[]).forEach(row=>{
       const existing = state.stamps[row.booth_id];
-      state.stamps[row.booth_id] = existing || {scannedAt: Date.now(), receivedAt: null, notSure:false};
+      state.stamps[row.booth_id] = existing || {scannedAt: Date.now(), receivedAt: null, notSure:false, pendingVerify: row.verified===false};
       if(row.received_at) state.stamps[row.booth_id].receivedAt = new Date(row.received_at).getTime();
     });
     saveState(state); renderMain();
@@ -184,7 +180,8 @@ async function pullFromCloud(){
 async function pushOne(boothId){
   if(!sb) return false;
   try{
-    const {data, error} = await sb.from('stamps').upsert({student_id: state.studentId, booth_id: boothId}).select('received_at').single();
+    const verified = !(state.stamps[boothId] && state.stamps[boothId].pendingVerify);
+    const {data, error} = await sb.from('stamps').upsert({student_id: state.studentId, booth_id: boothId, verified}).select('received_at').single();
     if(error) throw error;
     if(state.stamps[boothId]) state.stamps[boothId].receivedAt = (data && data.received_at) ? new Date(data.received_at).getTime() : Date.now();
     return true;
@@ -192,16 +189,6 @@ async function pushOne(boothId){
     log('Cloud write failed: '+e.message);
     showToast('⚠️ Stamp not synced: '+e.message, true);
     return false;
-  }
-}
-async function registerCloud(){
-  if(!sb) return;
-  try{
-    const {error} = await sb.from('students').upsert({student_id: state.studentId, name: state.name});
-    if(error) throw error;
-  }catch(e){
-    log('Cloud student upsert failed: '+e.message);
-    showToast('⚠️ Registered on this device only — cloud sync failed: '+e.message, true);
   }
 }
 async function maybeSync(){
@@ -215,32 +202,30 @@ async function maybeSync(){
   if(state.pendingSync.length===0) showToast('All stamps synced to cloud');
 }
 
-// ---- registration ----
-// Blocks registration on obviously-wrong input instead of silently saving
-// junk — a typo'd student ID here means a stamp history that can never be
-// found again if the phone is lost, since lookups key off this exact string.
-function register(){
-  const name = document.getElementById('nameInput').value.trim();
-  const id = document.getElementById('idInput').value.trim();
-  const err = document.getElementById('regErr');
-
-  if(!name || !id){
-    err.textContent = 'Enter your name and student ID to register.';
-    err.style.display='block'; return;
+// ---- login ----
+// Registration is now just the first login: Student ID + PIN creates the
+// account (see login.html), and a database trigger creates
+// the matching `profiles` row — so there's no separate students upsert here
+// anymore. If a *different* person logs in on a device that still holds
+// someone else's local stamps, we wipe that local state first so one
+// person's passport never shows up under another's login.
+function onLoggedIn(profile){
+  if(state.studentId && state.studentId !== profile.student_id){
+    state = {name:null, studentId:null, stamps:{}, pendingSync:[], online:navigator.onLine!==false};
   }
-  const nameErr = validateName(name);
-  if(nameErr){ err.textContent = nameErr; err.style.display='block'; return; }
-  const idErr = validateStudentId(id);
-  if(idErr){ err.textContent = idErr; err.style.display='block'; return; }
-  err.style.display='none';
-  state.name=name; state.studentId=id; saveState(state);
+  state.name = profile.name || profile.student_id;
+  state.studentId = profile.student_id;
+  saveState(state);
   renderMain();
-  registerCloud();
   if(sb) pullFromCloud();
 }
+// Logging out lives in the nav (shared.js signOut()), and the page guard has
+// already verified the session — including the offline case, via the cached
+// profile — so booting is just "start once the guard says who's here".
+function bootAuth(){ mountAuthGate(sb, {minRole:'user', onReady:onLoggedIn}); }
 
 function renderMain(){
-  document.getElementById('regView').style.display='none';
+  document.getElementById('authGate').style.display='none';
   document.getElementById('mainView').style.display='block';
   document.getElementById('badgeName').textContent = state.name;
   document.getElementById('badgeId').textContent = state.studentId;
@@ -254,12 +239,13 @@ function renderMain(){
     const stamp = state.stamps[b.id];
     const filled = !!stamp;
     const el = document.createElement('div');
-    el.className = 'stamp-slot'+(filled?' filled':'')+(filled && stamp.notSure?' not-sure':'');
+    el.className = 'stamp-slot'+(filled?' filled':'')+(filled && stamp.notSure?' not-sure':'')+(filled && stamp.pendingVerify?' pending-verify':'');
     let inner = `<div class="name">${b.name}</div>`;
     if(filled){
       inner += '<div class="stamp-mark">STAMPED</div>';
       inner += `<div class="stamp-meta">Scanned ${new Date(stamp.scannedAt).toLocaleTimeString()}<br>${stamp.receivedAt ? 'Received '+new Date(stamp.receivedAt).toLocaleTimeString() : (sb ? 'Received —' : '')}</div>`;
       if(stamp.notSure) inner += '<div class="not-sure-ribbon">Not Sure</div>';
+      else if(stamp.pendingVerify) inner += '<div class="pending-ribbon">Offline</div>';
     }
     el.innerHTML = inner;
     grid.appendChild(el);
@@ -270,12 +256,13 @@ function renderMain(){
   renderNetStatus(); renderCloudStatus();
 }
 
-function addStamp(boothId, boothName, notSure){
+function addStamp(boothId, boothName, notSure, pendingVerify){
   if(state.stamps[boothId]){ showToast(`Already stamped: ${boothName}`); return; }
-  state.stamps[boothId] = {scannedAt: Date.now(), receivedAt: null, notSure: !!notSure};
+  state.stamps[boothId] = {scannedAt: Date.now(), receivedAt: null, notSure: !!notSure, pendingVerify: !!pendingVerify};
   state.pendingSync.push(boothId);
   saveState(state); renderMain();
-  showToast((notSure ? '⏳ Not sure — grace period stamp: ' : 'Stamp added: ')+boothName + (state.online && sb ? '' : ' (queued)'), !!notSure);
+  const label = pendingVerify ? '📡 Offline — queued: ' : (notSure ? '⏳ Not sure — grace period stamp: ' : 'Stamp added: ');
+  showToast(label+boothName + (state.online && sb ? '' : ' (queued)'), !!notSure || !!pendingVerify);
   maybeSync();
 }
 
@@ -360,9 +347,41 @@ function exportPassportPNG(){
 // "Expired code" and "signature mismatch" aren't just rejections — they're
 // signals someone tried a stale screenshot or a forged code. Those get
 // logged (not just toasted) so staff can review it later at Testing > Flagged.
+//
+// Geofence check runs first, before we even look at the code: if it's on
+// (see Testing page's Geofence panel — off by default) and this phone is
+// outside the radius, we block right there. It works offline too, since
+// GPS itself needs no connection — only the enabled/lat/lng/radius values
+// (cached the last time this device was online) do.
+//
+// Offline scans: with no connection we can't check the HMAC signature at
+// all (attendee phones never cache a booth secret — only booth devices do,
+// see shared.js). So a well-formed code for a real booth gets accepted on
+// trust and queued as pendingVerify, same as any other pending stamp,
+// rather than blocking the attendee whenever venue wifi drops. It syncs to
+// the cloud the normal way once back online (pushOne just upserts the row —
+// it was never going to re-run the signature check a second time even for
+// a normal stamp). Genuinely malformed codes, or ones for an unrecognized
+// booth, still get rejected even offline.
 async function handleScannedText(text){
-  const result = await validateBoothCode(sb, text, loadRotation());
+  const geo = await checkGeofence(geoCfg);
+  if(!geo.ok && !geo.skipped){
+    showToast('📍 '+geo.reason, true);
+    return;
+  }
+
+  const result = await validateBoothCode(sb, text, loadRotation(), geo.lat, geo.lng);
   if(result.ok){ addStamp(result.booth.id, result.booth.name, result.notSure); return; }
+
+  if(result.offline){
+    if(result.booth){
+      addStamp(result.booth.id, result.booth.name, false, true);
+      showToast('📡 Offline — queued for '+result.booth.name+', will confirm once back online', true);
+    } else {
+      showToast("Scan rejected: doesn't look like a booth code");
+    }
+    return;
+  }
 
   const flagWorthy = result.reason.startsWith('Expired code') || result.reason.startsWith('Invalid code');
   if(flagWorthy){
@@ -518,7 +537,7 @@ function scanLoop(){
 
 // ---- init ----
 initSb();
-if(state.name && state.studentId){ renderMain(); if(sb) pullFromCloud(); }
+bootAuth();
 window.addEventListener('online', ()=>{ if(!state.online){ state.online=true; saveState(state); renderNetStatus(); maybeSync(); } });
 window.addEventListener('offline', ()=>{ if(state.online){ state.online=false; saveState(state); renderNetStatus(); } });
 if('serviceWorker' in navigator){

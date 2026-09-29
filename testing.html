@@ -12,7 +12,7 @@
 <title>ITLympics Testing Suite</title>
 <link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="shared.css">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="vendor/supabase.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -42,6 +42,8 @@
     <button class="btn-ghost" style="padding:6px 12px;font-size:12px;" onclick="openSettings()">Configure</button>
   </div>
 
+  <div id="authGate"></div>
+  <div id="gatedContent" style="display:none;">
   <div class="card">
     <div style="font-size:12px;color:var(--text-muted);">Testing against the passport registered on this device</div>
     <div id="whoLabel" style="font-size:15px;font-weight:500;margin-top:4px;">No one registered on this device yet</div>
@@ -52,6 +54,23 @@
     <h3>Scan a booth (no camera needed)</h3>
     <p class="demo-note">Generates a real, currently-valid code for that booth — using the same rotation interval set on the QR Booth page — and runs it through the same validation the camera path uses.</p>
     <div class="demo-booths" id="demoBooths"></div>
+  </div>
+
+  <div class="demo-section admin-only" style="display:none;">
+    <h3>Geofence (campus-only scanning)</h3>
+    <p class="demo-note">Gates the real Passport page's booth-code scanning to within a radius of campus — checked on the attendee's phone (works offline too, GPS needs no connection) AND re-checked server-side in <code>validate_booth_code</code>, so it can't be bypassed by editing the page's JS. It does <em>not</em> stop someone from feeding the browser a fake GPS reading in the first place (devtools location override, a mock-location app) — nothing short of comparing against the venue's own network can do that. Off by default so the app stays testable from anywhere; flip it on once staff are actually on campus. Takes effect on every phone within seconds, no redeploy. Only admins can change these (enforced server-side); everyone can read them, since there's no secret in an on/off switch and a public coordinate.</p>
+    <div class="row" style="align-items:center;gap:10px;margin-bottom:10px;">
+      <strong id="geofenceStatusLabel">Geofence: —</strong>
+      <button class="btn-ghost" onclick="toggleGeofence()">Toggle on/off</button>
+    </div>
+    <label for="geoLat">Center latitude</label>
+    <input type="text" id="geoLat">
+    <label for="geoLng">Center longitude</label>
+    <input type="text" id="geoLng">
+    <label for="geoRadius">Radius (meters)</label>
+    <input type="number" id="geoRadius" min="10">
+    <button class="btn-primary" style="margin-top:8px;" onclick="saveGeofenceSettings()">Save coordinates &amp; radius</button>
+    <p class="demo-note" style="margin-top:10px;margin-bottom:0;" id="geofenceDemoResult"></p>
   </div>
 
   <div class="demo-section" id="replayBox" style="display:none;">
@@ -79,7 +98,7 @@
     </div>
   </div>
 
-  <div class="demo-section">
+  <div class="demo-section admin-only" style="display:none;">
     <h3>Per-table wipe</h3>
     <p class="demo-note">Deletes every row from one cloud table — for resetting between test runs without touching the others. This only hits Supabase; it doesn't touch this device's local passport (use Full reset above for that), and it needs a confirmed cloud connection. <code>booth_secrets</code> is deliberately left off this list — wiping it breaks code generation for every booth until re-seeded.</p>
     <div class="demo-booths" id="wipeButtons"></div>
@@ -88,7 +107,7 @@
     </div>
   </div>
 
-  <div class="demo-section">
+  <div class="demo-section admin-only" style="display:none;">
     <h3>Mock data</h3>
     <p class="demo-note">Generates fake attendees with real writes — same tables and same code paths as an actual Registration or a real vote, just with made-up names and student IDs, so the Dashboard has something to look at. Not simulated locally like the booth scans above: these rows really land in Supabase.</p>
     <div class="row">
@@ -108,6 +127,27 @@
     <div id="liveFeed" style="max-height:220px;overflow-y:auto;font-family:monospace;font-size:11px;color:var(--text-muted);background:var(--paper-card);border:1px solid var(--line);border-radius:8px;padding:8px;"></div>
   </div>
 
+  <div class="demo-section admin-only" style="display:none;">
+    <h3>Manage roles</h3>
+    <p class="demo-note">Everyone starts as <strong>user</strong>. Promote a teammate to <strong>staff</strong> (booths, entrance, dashboard, sections) or <strong>admin</strong> (everything, including wiping data and changing geofence settings). They have to have logged in once first so their account exists. Only admins can do this — enforced by the database, not just this button.</p>
+    <div class="row">
+      <input type="text" id="roleStudentId" placeholder="Student ID, e.g. 23-0123">
+      <select id="roleSelect"><option value="user">user</option><option value="staff">staff</option><option value="admin">admin</option></select>
+    </div>
+    <button class="btn-primary" style="margin-top:8px;" onclick="applyRole()">Set role</button>
+    <div id="rolesList" style="margin-top:10px;font-size:12px;"></div>
+  </div>
+
+  <div class="demo-section">
+    <h3>Manage sections</h3>
+    <p class="demo-note">The Skills Registration page's course/section list — currently seeded from the SQL above. Add or remove one here instead of hand-editing the table; every device picks up the change on its next load, no redeploy.</p>
+    <div class="row">
+      <input type="text" id="newSectionInput" placeholder="e.g. BSIT 4-3" style="flex:1;">
+      <button class="btn-primary" onclick="addSection()">Add</button>
+    </div>
+    <div id="sectionsAdminList" style="max-height:220px;overflow-y:auto;margin-top:8px;"></div>
+  </div>
+
   <div class="demo-section">
     <h3>Flagged attempts</h3>
     <p class="demo-note">Expired or forged codes and duplicate check-ins — seeded from local storage so it's here even offline, then merged with every device's flags from the <code>flagged_scans</code> table (updates live via Realtime, needs Replication enabled). Each row shows when <em>this device saw it</em> (Scanned) and when the cloud confirmed the write (Received) — a row still saying "Received —" hasn't synced yet.</p>
@@ -120,6 +160,7 @@
     <h3>Event log</h3>
     <div id="eventLog" style="max-height:220px;overflow-y:auto;font-family:monospace;font-size:11px;color:var(--text-muted);background:var(--paper-card);border:1px solid var(--line);border-radius:8px;padding:8px;"></div>
   </div>
+  </div>
 
 </div>
 
@@ -130,114 +171,7 @@
     <input type="text" id="sbUrl" placeholder="https://xxxx.supabase.co">
     <label for="sbKey">Anon public key</label>
     <input type="text" id="sbKey" placeholder="eyJ...">
-    <p class="demo-note">Leave blank to stay local-only. Run the following once in the Supabase SQL editor to create the tables this app expects (received_at defaults to now() on insert/upsert — that's the timestamp the "Received At" fields read back):</p>
-    <pre style="font-size:10px;overflow-x:auto;background:var(--paper);padding:8px;border-radius:6px;">create table students (student_id text primary key, name text);
-create table stamps (
-  student_id text, booth_id text,
-  received_at timestamptz not null default now(),
-  primary key (student_id, booth_id)
-);
-create table flagged_scans (
-  id bigint generated always as identity primary key,
-  student_id text, booth_id text, booth_name text, reason text, raw text,
-  received_at timestamptz not null default now()
-);
--- If stamps already exists without received_at:
--- alter table stamps add column received_at timestamptz not null default now();</pre>
-    <p class="demo-note">Sections: used to live as a hardcoded list in <code>shared.js</code> — now it's this table instead, so staff can add/rename/remove sections without a redeploy. Skills Registration falls back to the old hardcoded list if this table is empty or unreachable.</p>
-    <pre style="font-size:10px;overflow-x:auto;background:var(--paper);padding:8px;border-radius:6px;">create table sections (name text primary key);
-insert into sections (name) values
-  ('BSIT 1-1'),('BSIT 1-2'),('BSIT 1-3'),('BSIT 2-1'),('BSIT 2-2'),('BSIT 2-3'),('BSIT 3-1'),('BSIT 3-2'),('BSIT 4-1'),('BSIT 4-2'),
-  ('BSCS 1-1'),('BSCS 1-2'),('BSCS 2-1'),('BSCS 2-2'),('BSCS 3-1'),('BSCS 3-2'),('BSCS 4-1'),
-  ('BSIS 1-1'),('BSIS 1-2'),('BSIS 2-1'),('BSIS 2-2'),('BSIS 3-1'),('BSIS 4-1'),
-  ('BSBA 1-1'),('BSBA 1-2'),('BSBA 2-1'),('BSBA 2-2'),('BSBA 3-1'),('BSBA 4-1'),
-  ('BSA 1-1'),('BSA 2-1'),('BSA 3-1'),('BSA 4-1'),
-  ('BEED 1-1'),('BEED 2-1'),('BEED 3-1'),('BEED 4-1'),
-  ('BSED 1-1'),('BSED 2-1'),('BSED 3-1'),('BSED 4-1')
-on conflict (name) do nothing;</pre>
-    <p class="demo-note">Booth codes: secrets live only in this table (no select policy for anon at all — nothing but the two functions below can ever read it), and generation/verification happen inside these two security-definer functions instead of in the client. To rotate a booth's secret later, just update this table — no redeploy needed.</p>
-    <pre style="font-size:10px;overflow-x:auto;background:var(--paper);padding:8px;border-radius:6px;">create extension if not exists pgcrypto;
-
-create table booth_secrets (
-  booth_id text primary key,
-  secret text not null
-);
-alter table booth_secrets enable row level security;
--- deliberately: no select policy for anon/authenticated. Nobody with the
--- anon key can read this table directly, ever — only the functions below,
--- which run as security definer, can see it.
-
-insert into booth_secrets (booth_id, secret) values
-  ('b1','s-code'), ('b2','s-valo'), ('b3','s-mlbb'),
-  ('b4','s-triv'), ('b5','s-chess'), ('b6','s-cos');
--- ^ these match the old client-side placeholder values — change them to
--- real secrets before the event (that's now just an `update`, see below).
-
-create or replace function generate_booth_code(p_booth_id text, p_rotation_seconds int default 30)
-returns text
-language plpgsql security definer set search_path = public, extensions as $$
-declare
-  v_secret text;
-  v_window_id bigint;
-begin
-  select secret into v_secret from booth_secrets where booth_id = p_booth_id;
-  if v_secret is null then return null; end if;
-  v_window_id := floor(extract(epoch from now()) / p_rotation_seconds);
-  return 'BOOTH:' || p_booth_id || ':' || v_window_id || ':' ||
-    substring(encode(hmac((p_booth_id || ':' || v_window_id::text)::bytea, v_secret::bytea, 'sha256'), 'hex') from 1 for 10);
-end;
-$$;
-
-create or replace function validate_booth_code(p_code text, p_rotation_seconds int default 30)
-returns table(ok boolean, booth_id text, not_sure boolean, reason text)
-language plpgsql security definer set search_path = public, extensions as $$
-declare
-  v_parts text[];
-  v_booth_id text; v_window_id bigint; v_code text; v_secret text;
-  v_now numeric; v_my_window bigint; v_secs_into numeric;
-  v_expected text; v_not_sure boolean := false;
-  v_grace_seconds constant int := 5;
-begin
-  if p_code is null or left(p_code, 6) <> 'BOOTH:' then
-    return query select false, null::text, false, 'Not a booth code'; return;
-  end if;
-  v_parts := string_to_array(p_code, ':');
-  if array_length(v_parts, 1) <> 4 then
-    return query select false, null::text, false, 'Malformed code'; return;
-  end if;
-  v_booth_id := v_parts[2];
-  v_window_id := nullif(v_parts[3], '')::bigint;
-  v_code := v_parts[4];
-  if v_window_id is null then
-    return query select false, null::text, false, 'Malformed code'; return;
-  end if;
-  select secret into v_secret from booth_secrets where booth_secrets.booth_id = v_booth_id;
-  if v_secret is null then
-    return query select false, null::text, false, 'Unknown booth'; return;
-  end if;
-  v_now := extract(epoch from now());
-  v_my_window := floor(v_now / p_rotation_seconds);
-  v_secs_into := v_now - v_my_window * p_rotation_seconds;
-  if v_window_id = v_my_window then
-    v_not_sure := false;
-  elsif v_window_id = v_my_window - 1 and v_secs_into < v_grace_seconds then
-    v_not_sure := true;
-  else
-    return query select false, v_booth_id, false, 'Expired code (outside sync window)'; return;
-  end if;
-  v_expected := substring(encode(hmac((v_booth_id || ':' || v_window_id::text)::bytea, v_secret::bytea, 'sha256'), 'hex') from 1 for 10);
-  if v_expected <> v_code then
-    return query select false, v_booth_id, false, 'Invalid code (signature mismatch)'; return;
-  end if;
-  return query select true, v_booth_id, v_not_sure, null::text;
-end;
-$$;
-
-grant execute on function generate_booth_code(text, int) to anon, authenticated;
-grant execute on function validate_booth_code(text, int) to anon, authenticated;
-
--- To rotate a secret later, no redeploy needed:
--- update booth_secrets set secret = 'new-secret-here' where booth_id = 'b1';</pre>
+    <p class="demo-note">Leave blank to stay local-only. The database setup is a single file, <code>schema.sql</code>, kept <em>outside</em> the deployed site — paste it into the Supabase SQL editor and run it (it's safe to run again). It is deliberately not printed on this page: this page is public, and the old copy of the SQL that used to sit here included the booth secrets.</p>
     <div class="row">
       <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
       <button class="btn-primary" onclick="saveSettings()">Save</button>
@@ -249,6 +183,7 @@ grant execute on function validate_booth_code(text, int) to anon, authenticated;
 <script src="shared.js"></script>
 <script>
 let state = loadState(), cfg = loadCfg(), sb = null;
+let geoCfg = loadGeofenceCfg();
 let driftSeconds=0, lastScannedCode=null;
 
 function showToast(msg){
@@ -332,7 +267,27 @@ function toggleNet(){
 }
 
 // ---- Supabase (cloud backend) ----
-function initSb(){ sb = initSupabase(cfg); renderCloudStatus(); initLiveRegs(); initFlags(); loadSections(sb).then(list=>sectionsList=list); }
+let myProfile = null;
+function startTools(){
+  initLiveRegs(); initFlags();
+  loadSections(sb).then(list=>{ sectionsList=list; renderSectionsAdmin(); });
+  refreshGeofencePanel();
+  if(myProfile && myProfile.role==='admin') renderRolesList();
+}
+// Staff+ can open this page; the destructive tools (wipe, mock data,
+// geofence, roles) are only shown to admins — and the database enforces the
+// same split, so hiding the buttons is a convenience, not the protection.
+function initSb(){
+  sb = initSupabase(cfg); renderCloudStatus();
+  if(myProfile){ startTools(); return; }
+  mountAuthGate(sb, {containerId:'authGate', minRole:'staff', onReady:(profile)=>{
+    myProfile = profile;
+    document.getElementById('gatedContent').style.display='block';
+    if(profile.role==='admin') document.querySelectorAll('.admin-only').forEach(el=>el.style.display='block');
+    const el = document.getElementById('cloudLabel'); if(el) el.textContent = `Signed in: ${profile.name||profile.student_id} (${profile.role})`;
+    startTools();
+  }});
+}
 
 // ---- live skills registrations feed ----
 const liveRegs = []; // {studentId, name, section, ts} — most recent first, in-memory for this session
@@ -386,14 +341,120 @@ function saveSettings(){
   log(sb ? 'Cloud backend connected' : 'Cloud backend cleared');
   if(sb) pullFromCloud();
 }
+
+// ---- geofence panel ----
+function renderGeofencePanel(){
+  document.getElementById('geofenceStatusLabel').textContent =
+    `Geofence: ${geoCfg.enabled ? 'ON' : 'OFF'} (${geoCfg.radiusM}m around ${geoCfg.lat.toFixed(5)}, ${geoCfg.lng.toFixed(5)})`;
+  document.getElementById('geoLat').value = geoCfg.lat;
+  document.getElementById('geoLng').value = geoCfg.lng;
+  document.getElementById('geoRadius').value = geoCfg.radiusM;
+}
+async function refreshGeofencePanel(){ geoCfg = await fetchGeofenceCfg(sb); renderGeofencePanel(); }
+async function toggleGeofence(){
+  if(!sb){ showToast('Connect to Supabase first'); return; }
+  const next = !geoCfg.enabled;
+  const ok = await setEventSetting(sb, 'geofence_enabled', next);
+  if(!ok){ showToast('Failed — only admins can change geofence settings'); return; }
+  log(`Geofence turned ${next ? 'ON' : 'OFF'} for every device`);
+  showToast(`Geofence ${next ? 'enabled' : 'disabled'} for every device`);
+  refreshGeofencePanel();
+}
+async function saveGeofenceSettings(){
+  if(!sb){ showToast('Connect to Supabase first'); return; }
+  const lat = parseFloat(document.getElementById('geoLat').value);
+  const lng = parseFloat(document.getElementById('geoLng').value);
+  const radius = parseFloat(document.getElementById('geoRadius').value);
+  if(Number.isNaN(lat) || Number.isNaN(lng) || Number.isNaN(radius)){ showToast('Enter valid numbers'); return; }
+  const results = await Promise.all([
+    setEventSetting(sb, 'geofence_lat', lat),
+    setEventSetting(sb, 'geofence_lng', lng),
+    setEventSetting(sb, 'geofence_radius_m', radius),
+  ]);
+  if(results.some(r=>!r)){ showToast('Failed — only admins can change geofence settings'); return; }
+  log('Geofence coordinates/radius updated');
+  showToast('Saved — takes effect on next scan for every device');
+  refreshGeofencePanel();
+}
+
+// ---- roles admin (admin only, enforced server-side by set_user_role) ----
+async function applyRole(){
+  const id = document.getElementById('roleStudentId').value.trim();
+  const role = document.getElementById('roleSelect').value;
+  if(validateStudentId(id)){ showToast('Enter a valid Student ID (YY-NNNN)'); return; }
+  if(id === myProfile.student_id && role !== 'admin' && !confirm('You are about to demote your own account. Continue?')) return;
+  const ok = await setUserRole(sb, id, role);
+  if(!ok){ showToast('Failed — that account may not exist yet (they need to log in once), you are not an admin, or this would remove the last admin'); return; }
+  log(`Role set: ${id} -> ${role}`);
+  showToast(`${id} is now ${role}`);
+  document.getElementById('roleStudentId').value = '';
+  renderRolesList();
+}
+async function renderRolesList(){
+  const el = document.getElementById('rolesList'); if(!el || !sb) return;
+  const {data, error} = await sb.from('profiles').select('student_id, name, role').in('role', ['staff','admin']).order('role').order('student_id');
+  if(error){ el.textContent = 'Could not load roles: '+error.message; return; }
+  el.innerHTML = '<div style="color:var(--text-muted);margin-bottom:4px;">Current staff &amp; admins</div>' +
+    ((data||[]).map(r=>`<div style="padding:3px 0;border-bottom:1px solid var(--line);">${r.name||''} · ${r.student_id} · <strong>${r.role}</strong></div>`).join('') || 'None yet.');
+}
+
+// ---- sections admin ----
+// No PIN gate here (unlike booth secrets / geofence) — worst case someone
+// adds a junk section name, easy to spot and delete, not a real integrity
+// or safety issue, so it's not worth the extra friction for staff.
+function renderSectionsAdmin(){
+  const el = document.getElementById('sectionsAdminList');
+  if(!el) return;
+  el.innerHTML = '';
+  if(!sb){ el.innerHTML = '<div class="demo-note" style="margin:0;">Connect to Supabase to manage sections — showing the local fallback list for now.</div>'; }
+  sectionsList.forEach(name=>{
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:5px 0;border-bottom:1px solid var(--line);';
+    row.innerHTML = `<span>${name}</span>`;
+    const btn = document.createElement('button');
+    btn.className = 'btn-ghost'; btn.style.cssText = 'padding:2px 8px;font-size:11px;color:#b33333;border-color:#b33333;flex:none;';
+    btn.textContent = '×';
+    btn.disabled = !sb;
+    btn.onclick = () => removeSection(name);
+    row.appendChild(btn);
+    el.appendChild(row);
+  });
+}
+async function addSection(){
+  if(!sb){ showToast('Connect to Supabase first'); return; }
+  const input = document.getElementById('newSectionInput');
+  const name = input.value.trim();
+  if(!name){ return; }
+  if(sectionsList.includes(name)){ showToast('Already in the list'); return; }
+  try{
+    const {error} = await sb.from('sections').insert({name});
+    if(error) throw error;
+    sectionsList = [...sectionsList, name].sort();
+    input.value = '';
+    renderSectionsAdmin();
+    log(`Section added: ${name}`);
+    showToast('Section added');
+  }catch(e){ showToast('Failed: '+e.message); }
+}
+async function removeSection(name){
+  if(!sb) return;
+  try{
+    const {error} = await sb.from('sections').delete().eq('name', name);
+    if(error) throw error;
+    sectionsList = sectionsList.filter(s=>s!==name);
+    renderSectionsAdmin();
+    log(`Section removed: ${name}`);
+    showToast('Section removed');
+  }catch(e){ showToast('Failed: '+e.message); }
+}
 async function pullFromCloud(){
   if(!sb || !state.studentId) return;
   try{
-    const {data, error} = await sb.from('stamps').select('booth_id, received_at').eq('student_id', state.studentId);
+    const {data, error} = await sb.from('stamps').select('booth_id, received_at, verified').eq('student_id', state.studentId);
     if(error) throw error;
     (data||[]).forEach(row=>{
       const existing = state.stamps[row.booth_id];
-      state.stamps[row.booth_id] = existing || {scannedAt: Date.now(), receivedAt: null, notSure:false};
+      state.stamps[row.booth_id] = existing || {scannedAt: Date.now(), receivedAt: null, notSure:false, pendingVerify: row.verified===false};
       if(row.received_at) state.stamps[row.booth_id].receivedAt = new Date(row.received_at).getTime();
     });
     saveState(state); renderWho();
@@ -403,7 +464,8 @@ async function pullFromCloud(){
 async function pushOne(boothId){
   if(!sb) return false;
   try{
-    const {data, error} = await sb.from('stamps').upsert({student_id: state.studentId, booth_id: boothId}).select('received_at').single();
+    const verified = !(state.stamps[boothId] && state.stamps[boothId].pendingVerify);
+    const {data, error} = await sb.from('stamps').upsert({student_id: state.studentId, booth_id: boothId, verified}).select('received_at').single();
     if(error) throw error;
     if(state.stamps[boothId]) state.stamps[boothId].receivedAt = (data && data.received_at) ? new Date(data.received_at).getTime() : Date.now();
     return true;
@@ -551,8 +613,29 @@ async function handleScannedText(text){
   lastScannedCode = text;
   document.getElementById('replayBox').style.display='block';
   document.getElementById('replayRaw').textContent = text;
-  const result = await validateBoothCode(sb, text, loadRotation());
+
+  // Demo tool: shows what the geofence check would decide, but never
+  // blocks the simulated scan on it — lets staff test the logic (distance
+  // math, on/off state) from anywhere, since this desk usually isn't on
+  // campus. The real Passport page (index.html) DOES block on this.
+  const geo = await checkGeofence(geoCfg);
+  const geoNote = document.getElementById('geofenceDemoResult');
+  if(geo.skipped){ geoNote.textContent = 'Geofence is OFF — real scans would not check location either.'; }
+  else if(geo.ok){ geoNote.textContent = `Geofence check: within range (~${Math.round(geo.distanceM)}m from center).`; }
+  else { geoNote.textContent = `Geofence check: would BLOCK on a real device — ${geo.reason}`; }
+
+  const result = await validateBoothCode(sb, text, loadRotation(), geo.lat, geo.lng);
   if(result.ok){ addStamp(result.booth.id, result.booth.name, result.notSure); }
+  else if(result.offline){
+    if(result.booth){
+      addStamp(result.booth.id, result.booth.name, false, true);
+      showToast('📡 Offline — queued for '+result.booth.name, true);
+      log(`Offline scan queued (unverified): ${result.booth.name}`);
+    } else {
+      showToast("Scan rejected: doesn't look like a booth code");
+      log("Offline scan rejected — not a recognizable booth code");
+    }
+  }
   else {
     showToast('Scan rejected: '+result.reason);
     log('Scan rejected: '+result.reason);
@@ -570,6 +653,10 @@ async function replayLastCode(){
     showToast(result.notSure ? 'Replay accepted — not sure (grace period)' : 'Replay accepted (still within window)', !!result.notSure);
     log(result.notSure ? 'Replay accepted — flagged not-sure (grace period)' : 'Replay accepted');
     addStamp(result.booth.id, result.booth.name, result.notSure);
+  } else if(result.offline && result.booth){
+    addStamp(result.booth.id, result.booth.name, false, true);
+    showToast('📡 Offline — queued for '+result.booth.name, true);
+    log(`Replay queued offline (unverified): ${result.booth.name}`);
   } else {
     showToast('Replay blocked: '+result.reason);
     log('Replay blocked: '+result.reason);
@@ -577,29 +664,31 @@ async function replayLastCode(){
 }
 async function simulateScan(boothId, boothName){
   const rotationSeconds = loadRotation();
-  const raw = await generateBoothCode(sb, boothId, rotationSeconds);
-  if(!raw){ showToast("Can't simulate — cloud backend not connected"); return; }
-  await handleScannedText(raw);
+  const result = await generateBoothCode(sb, boothId, rotationSeconds);
+  if(!result.code){ showToast(sb ? "Can't simulate — verification failed" : "Can't simulate — no cloud connection and no cached seed for this booth"); return; }
+  if(result.offline) log(`Simulated code generated OFFLINE (cached seed) for ${boothName}`);
+  await handleScannedText(result.code);
 }
 function onDriftChange(){
   driftSeconds = parseInt(document.getElementById('driftSlider').value)||0;
   document.getElementById('driftLabel').textContent = `Simulated clock drift: ${driftSeconds>=0?'+':''}${driftSeconds}s`;
 }
 
-function addStamp(boothId, boothName, notSure){
+function addStamp(boothId, boothName, notSure, pendingVerify){
   if(!state.name){ showToast('Register on the Passport page first'); log('Ignored stamp — no one registered on this device'); return; }
   if(state.stamps[boothId]){ log(`Ignored duplicate stamp for ${boothName}`); return; }
-  state.stamps[boothId] = {scannedAt: Date.now(), receivedAt: null, notSure: !!notSure};
+  state.stamps[boothId] = {scannedAt: Date.now(), receivedAt: null, notSure: !!notSure, pendingVerify: !!pendingVerify};
   state.pendingSync.push(boothId);
   saveState(state); renderWho();
-  showToast((notSure ? '⏳ Not sure — grace period stamp: ' : 'Stamp added: ')+boothName + (state.online && sb ? '' : ' (queued)'), !!notSure);
-  log(`Stamp added: ${boothName}` + (notSure ? ' (not sure — grace period)' : ''));
+  const label = pendingVerify ? '📡 Queued (offline, unverified): ' : (notSure ? '⏳ Not sure — grace period stamp: ' : 'Stamp added: ');
+  showToast(label+boothName + (state.online && sb ? '' : ' (queued)'), !!notSure || !!pendingVerify);
+  log(`Stamp added: ${boothName}` + (notSure ? ' (not sure — grace period)' : '') + (pendingVerify ? ' (offline — unverified)' : ''));
   maybeSync();
 }
 
 // ---- init ----
 initSb();
-renderWho(); renderNetStatus(); renderDemoButtons(); renderFlags(); renderLiveRegs(); renderWipeButtons();
+renderWho(); renderNetStatus(); renderDemoButtons(); renderFlags(); renderLiveRegs(); renderWipeButtons(); renderSectionsAdmin();
 window.addEventListener('online', ()=>{ if(!state.online){ state.online=true; saveState(state); renderNetStatus(); maybeSync(); } });
 window.addEventListener('offline', ()=>{ if(state.online){ state.online=false; saveState(state); renderNetStatus(); } });
 </script>

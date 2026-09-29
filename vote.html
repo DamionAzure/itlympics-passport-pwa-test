@@ -12,7 +12,7 @@
 <title>ITLympics Game Con Voting</title>
 <link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="shared.css">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="vendor/supabase.js"></script>
 <style>
   .cat-tabs{display:flex;gap:8px;overflow-x:auto;margin-bottom:16px;padding-bottom:2px;}
   .cat-tab{flex-shrink:0;font-size:12px;padding:8px 12px;border:1px solid var(--line);border-radius:20px;background:var(--paper-card);cursor:pointer;color:var(--text-muted);white-space:nowrap;}
@@ -50,8 +50,10 @@
     <div><span class="dot" id="netDot"></span><span id="netLabel">Venue wifi: checking...</span></div>
   </div>
 
+  <div id="authGate"></div>
+
   <div id="needsRegView" class="card" style="display:none;">
-    <p style="margin:0;">Register on the <a href="index.html">Passport page</a> first — voting is tied to your student ID.</p>
+    <p style="margin:0;">Log in first — voting is tied to your student ID.</p>
   </div>
 
   <div id="needsCloudView" class="card" style="display:none;">
@@ -85,7 +87,6 @@ let activeCategory = VOTE_CATEGORIES[0].id;
 const selected = {};   // categoryId -> candidateId picked but not yet cast
 const myVotes = {};    // categoryId -> candidateId already cast by this student
 const counts = {};     // categoryId -> {candidateId: n}
-const countedKeys = new Set(); // "studentId:categoryId" already tallied, so realtime never double-counts our own insert
 VOTE_CATEGORIES.forEach(cat=>{ counts[cat.id] = {}; cat.candidates.forEach(c=>counts[cat.id][c.id]=0); });
 
 function categoryById(id){ return VOTE_CATEGORIES.find(c=>c.id===id); }
@@ -105,11 +106,16 @@ function renderNetStatus(){
   if(btn) btn.disabled = !state.online || !!myVotes[activeCategory] || !selected[activeCategory];
 }
 
-function tallyRow(r){
-  const key = r.student_id+':'+r.category_id;
-  if(countedKeys.has(key)) return;
-  countedKeys.add(key);
-  if(counts[r.category_id] && counts[r.category_id][r.candidate_id]!==undefined) counts[r.category_id][r.candidate_id]++;
+// Totals come from the vote_tally() function, which returns counts only. The
+// votes table itself is private (you can read just your own row), so nobody can
+// see who voted for whom — but everyone still sees the live results.
+async function refreshTallies(){
+  if(!sb) return;
+  const {data, error} = await sb.rpc('vote_tally');
+  if(error || !data) return;
+  VOTE_CATEGORIES.forEach(cat=>cat.candidates.forEach(c=>{ counts[cat.id][c.id] = 0; }));
+  data.forEach(r=>{ if(counts[r.category_id] && counts[r.category_id][r.candidate_id]!==undefined) counts[r.category_id][r.candidate_id] = Number(r.votes); });
+  renderResults();
 }
 
 function renderTabs(){
@@ -183,7 +189,7 @@ async function castVote(){
       }
     } else {
       myVotes[catId] = candId;
-      tallyRow({student_id: state.studentId, category_id: catId, candidate_id: candId});
+      refreshTallies();
       showToast('Vote cast!');
     }
   }catch(e){
@@ -195,29 +201,23 @@ async function castVote(){
 
 async function loadExistingVotes(){
   const {data} = await sb.from('votes').select('category_id,candidate_id').eq('student_id', state.studentId);
-  (data||[]).forEach(r=>{ myVotes[r.category_id]=r.candidate_id; tallyRow({student_id: state.studentId, ...r}); });
-}
-async function loadAllResults(){
-  const {data} = await sb.from('votes').select('student_id,category_id,candidate_id');
-  (data||[]).forEach(r=>tallyRow(r));
+  (data||[]).forEach(r=>{ myVotes[r.category_id]=r.candidate_id; });
 }
 
 async function initSb(){
   sb = initSupabase(cfg);
-
-  if(!state.studentId){ document.getElementById('needsRegView').style.display='block'; return; }
   if(!sb){ document.getElementById('needsCloudView').style.display='block'; return; }
-
+  // Voting is tied to the logged-in account, not a locally-typed ID — the
+  // server-side policy only lets you insert a vote for your own student_id.
+  mountAuthGate(sb, {containerId:'authGate', minRole:'user', signupName:true, onReady: startVoting});
+}
+async function startVoting(profile){
+  if(state.studentId !== profile.student_id){ state.studentId = profile.student_id; state.name = profile.name || profile.student_id; saveState(state); }
   document.getElementById('mainView').style.display='block';
-  try{ await loadAllResults(); await loadExistingVotes(); }catch(e){}
+  try{ await refreshTallies(); await loadExistingVotes(); }catch(e){}
   renderAll();
 
-  subscribeTable(sb, 'votes', (payload)=>{
-    const r = payload.new; if(!r) return;
-    tallyRow(r);
-    if(r.category_id === activeCategory) renderResults();
-    if(r.student_id === state.studentId){ myVotes[r.category_id]=r.candidate_id; renderAll(); }
-  });
+  setInterval(()=>{ if(!document.hidden) refreshTallies(); }, 8000);   // live-ish totals; pauses while the tab is hidden
 }
 
 // ---- init ----

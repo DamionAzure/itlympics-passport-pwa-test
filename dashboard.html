@@ -12,7 +12,7 @@
 <title>ITLympics Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="shared.css">
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="vendor/supabase.js"></script>
 <style>
   .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;}
   .stat-card{border:1px solid var(--line);border-radius:10px;padding:12px 8px;text-align:center;background:var(--paper-card);}
@@ -24,6 +24,9 @@
   .bar-fill{background:var(--amber);height:100%;transition:width .3s;}
   .cat-heading{font-size:12px;font-weight:500;color:var(--text-muted);margin:14px 0 6px;text-transform:uppercase;letter-spacing:.03em;}
   .cat-heading:first-child{margin-top:0;}
+  .review-row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12px;padding:8px 0;border-bottom:1px solid var(--line);}
+  .review-row:last-child{border-bottom:none;}
+  .review-meta{color:var(--text-muted);}
 </style>
 </head>
 <body>
@@ -50,6 +53,8 @@
     <button class="btn-ghost" style="padding:6px 12px;font-size:12px;" onclick="loadAll()">Refresh</button>
   </div>
 
+  <div id="authGate"></div>
+
   <div id="needsCloudView" class="card" style="display:none;">
     <p style="margin:0;">The Dashboard needs a live cloud connection to read event data. Configure it from the <a href="testing.html">Testing page</a>, then reload this page.</p>
   </div>
@@ -62,6 +67,7 @@
         <div class="stat-card"><div class="stat-num" id="statSkills">–</div><div class="stat-label">Skills registrations</div></div>
         <div class="stat-card"><div class="stat-num" id="statCheckins">–</div><div class="stat-label">Entrance check-ins</div></div>
         <div class="stat-card"><div class="stat-num" id="statStamps">–</div><div class="stat-label">Booth stamps issued</div></div>
+        <div class="stat-card"><div class="stat-num" id="statUnverified">–</div><div class="stat-label">Unverified (offline scans)</div></div>
         <div class="stat-card"><div class="stat-num" id="statVotes">–</div><div class="stat-label">Total votes cast</div></div>
       </div>
       <div style="font-size:11px;color:var(--text-muted);margin-top:10px;" id="lastUpdated"></div>
@@ -77,6 +83,12 @@
       <h3 style="margin-top:0;font-size:14px;">Booth stamps progress</h3>
       <p class="demo-note" style="margin-bottom:8px;">Share of registered attendees who've been stamped at each booth.</p>
       <div id="boothBreakdown"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;font-size:14px;">Unverified stamps — offline scans</h3>
+      <p class="demo-note" style="margin-bottom:8px;">Accepted on trust because the attendee's phone was offline at the moment of scanning, so the code's signature was never checked against the booth secret (see index.html). Almost always legitimate — venue wifi drops happen — but worth a glance if a booth reports something odd, since this is the one path that skips signature verification entirely. Mark a row verified once you're satisfied it's fine; that just clears it from this list.</p>
+      <div id="unverifiedList"></div>
     </div>
 
     <div class="card">
@@ -111,9 +123,9 @@ async function loadAll(){
   if(!sb) return;
   try{
     const [studentsRes, skillsRes, stampsRes, checkinsRes, votesRes] = await Promise.all([
-      sb.from('students').select('student_id', {count:'exact', head:true}),
+      sb.from('profiles').select('student_id', {count:'exact', head:true}),
       sb.from('skills_registrations').select('student_id, section'),
-      sb.from('stamps').select('booth_id'),
+      sb.from('stamps').select('student_id, booth_id, received_at, verified'),
       sb.from('checkins').select('student_id', {count:'exact', head:true}),
       sb.from('votes').select('category_id, candidate_id'),
     ]);
@@ -148,6 +160,27 @@ async function loadAll(){
     boothEl.innerHTML = '';
     BOOTHS.forEach(b=>boothEl.appendChild(barRow(b.name, byBooth[b.id], studentCount)));
 
+    // ---- unverified (offline-accepted) stamps — spot-check list ----
+    const unverifiedRows = stampRows.filter(r=>r.verified===false)
+      .sort((a,b)=>new Date(b.received_at)-new Date(a.received_at));
+    document.getElementById('statUnverified').textContent = unverifiedRows.length;
+    const reviewEl = document.getElementById('unverifiedList');
+    reviewEl.innerHTML = '';
+    if(!unverifiedRows.length){ reviewEl.textContent = 'None — every synced stamp has been signature-verified.'; }
+    unverifiedRows.forEach(r=>{
+      const booth = BOOTHS.find(b=>b.id===r.booth_id);
+      const row = document.createElement('div');
+      row.className = 'review-row';
+      const when = r.received_at ? new Date(r.received_at).toLocaleString() : '—';
+      row.innerHTML = `<div><strong>${r.student_id}</strong> @ ${booth ? booth.name : r.booth_id}<div class="review-meta">${when}</div></div>`;
+      const btn = document.createElement('button');
+      btn.className = 'btn-ghost'; btn.style.cssText = 'padding:4px 10px;font-size:11px;flex-shrink:0;';
+      btn.textContent = 'Mark verified';
+      btn.onclick = () => markVerified(r.student_id, r.booth_id, btn);
+      row.appendChild(btn);
+      reviewEl.appendChild(row);
+    });
+
     // ---- voting leaderboards, one per category ----
     const voteEl = document.getElementById('voteBreakdown');
     voteEl.innerHTML = '';
@@ -169,6 +202,24 @@ async function loadAll(){
   }
 }
 
+// Staff spot-check: clears the unverified flag on one stamp once someone's
+// glanced at it and is satisfied it's a real (just offline-scanned) stamp,
+// not a forged one. Doesn't re-run the HMAC check — there's nothing left to
+// check it against once its rotation window has long passed — this is a
+// human judgment call, same as reviewing Testing > Flagged attempts.
+async function markVerified(studentId, boothId, btn){
+  if(!sb) return;
+  btn.disabled = true; btn.textContent = '...';
+  try{
+    const {error} = await sb.from('stamps').update({verified:true}).eq('student_id', studentId).eq('booth_id', boothId);
+    if(error) throw error;
+    loadAll();
+  }catch(e){
+    btn.disabled = false; btn.textContent = 'Mark verified';
+    alert('Failed to update: '+e.message);
+  }
+}
+
 // Any insert/update on the tables this dashboard reads triggers a full
 // re-fetch — simpler and less error-prone than tallying deltas client-side,
 // and this dashboard is read-only so there's no local state to reconcile.
@@ -182,9 +233,15 @@ function initSb(){
   sb = initSupabase(cfg);
   renderCloudStatus();
   if(!sb){ document.getElementById('needsCloudView').style.display='block'; return; }
-  document.getElementById('mainView').style.display='block';
-  loadAll();
-  ['students','skills_registrations','stamps','checkins','votes'].forEach(t=>subscribeTable(sb, t, scheduleRefresh));
+  // Staff and admins both get the Dashboard (per-person accounts, so the
+  // whole team can look at it). Read access to stamps/checkins/etc. is
+  // itself restricted to staff+ by the database, not just hidden here.
+  mountAuthGate(sb, {containerId:'authGate', minRole:'staff', onReady:(profile)=>{
+    document.getElementById('mainView').style.display='block';
+    document.getElementById('cloudLabel').textContent = `Signed in: ${profile.name||profile.student_id} (${profile.role})`;
+    loadAll();
+    ['profiles','skills_registrations','stamps','checkins','votes'].forEach(t=>subscribeTable(sb, t, scheduleRefresh));
+  }});
 }
 
 // ---- init ----

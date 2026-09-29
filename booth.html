@@ -14,7 +14,7 @@
 <link rel="stylesheet" href="shared.css">
 <!-- Vendored locally (./vendor/) — see index.html for why. -->
 <script src="vendor/qrcode.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="vendor/supabase.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -40,6 +40,8 @@
     <button class="btn-ghost" style="padding:6px 12px;font-size:12px;" onclick="openSettings()">Configure</button>
   </div>
 
+  <div id="authGate"></div>
+  <div id="gatedContent" style="display:none;">
   <div class="card">
     <label for="boothSelect">This device is displaying for</label>
     <select id="boothSelect" onchange="onBoothChange()"></select>
@@ -55,7 +57,8 @@
     <div style="font-size:13px;color:var(--amber);margin-top:8px;" id="genCountdown"></div>
   </div>
 
-  <p class="demo-note">Attendees scan this with their Passport app's camera to get stamped. The code rotates automatically, verified server-side against the booth secret — keep this device on venue wifi, since it needs a live connection to generate each code (see Configure).</p>
+  <p class="demo-note">Attendees scan this with their Passport app's camera to get stamped. The code rotates automatically. While this device has a connection, each code is generated and verified server-side against the booth secret; if venue wifi drops, it falls back to computing codes locally from the seed it cached the last time it was online (it needs to have been logged in and online once so the seed is cached). Only staff and admins can open this page.</p>
+  </div>
 
 </div>
 
@@ -66,7 +69,7 @@
     <input type="text" id="sbUrl" placeholder="https://xxxx.supabase.co">
     <label for="sbKey">Anon public key</label>
     <input type="text" id="sbKey" placeholder="eyJ...">
-    <p class="demo-note">Required on this device — the rotating code is generated server-side now, so the booth secrets never ship here. See the Testing page for the SQL schema.</p>
+    <p class="demo-note">Booth Display needs a staff or admin login. While logged in with a connection, this device also caches <em>this one booth's</em> secret so it can keep computing valid rotating codes locally if venue wifi drops.</p>
     <div class="row">
       <button class="btn-ghost" onclick="closeSettings()">Cancel</button>
       <button class="btn-primary" onclick="saveSettings()">Save</button>
@@ -90,7 +93,16 @@ function showToast(msg){
 
 // ---- Supabase (cloud backend) ----
 // Required on this page now: generate_booth_code is an RPC, not local math.
-function initSb(){ sb = initSupabase(cfg); renderCloudStatus(); startGenerator(); }
+let boothReady = false;
+function initSb(){
+  sb = initSupabase(cfg); renderCloudStatus();
+  if(boothReady){ startGenerator(); return; }
+  mountAuthGate(sb, {containerId:'authGate', minRole:'staff', onReady:()=>{
+    boothReady = true;
+    document.getElementById('gatedContent').style.display='block';
+    startGenerator();
+  }});
+}
 function renderCloudStatus(){
   const el = document.getElementById('cloudLabel');
   if(el) el.textContent = sb ? 'Cloud backend: connected' : 'Cloud backend: not configured';
@@ -142,22 +154,23 @@ async function refreshGenerator(){
   const rotationSeconds = loadRotation();
   const nowWindow = Math.floor(Date.now()/1000 / rotationSeconds);
   const secsLeft = rotationSeconds - (Math.floor(Date.now()/1000) % rotationSeconds);
-
-  if(!sb){
-    document.getElementById('genQr').innerHTML='';
-    document.getElementById('genRaw').textContent = "Can't generate — cloud backend not connected (see Configure)";
-    document.getElementById('genCountdown').textContent = '';
-    return;
-  }
+  let offline = false;
 
   if(nowWindow !== lastFetchedWindow){
     lastFetchedWindow = nowWindow;
-    lastRaw = await generateBoothCode(sb, boothId, rotationSeconds);
+    const result = await generateBoothCode(sb, boothId, rotationSeconds);
+    lastRaw = result.code; offline = result.offline;
+  } else {
+    // Same window as last tick — no new RPC/HMAC needed, but still reflect
+    // whether the code on screen came from cache vs a live call.
+    offline = !sb;
   }
 
   const box = document.getElementById('genQr'); box.innerHTML='';
   if(!lastRaw){
-    document.getElementById('genRaw').textContent = 'Verification failed — check connection and try again';
+    document.getElementById('genRaw').textContent = sb
+      ? 'Verification failed — check connection and try again'
+      : "No cached seed yet — connect once while logged in as staff so this device can cache it";
     document.getElementById('genCountdown').textContent = '';
     return;
   }
@@ -168,7 +181,10 @@ async function refreshGenerator(){
   // most here.
   new QRCode(box, {text: lastRaw, width:220, height:220, colorDark:'#000000', colorLight:'#ffffff'});
   document.getElementById('genRaw').textContent = lastRaw;
-  document.getElementById('genCountdown').textContent = `rotates in ${secsLeft}s`;
+  const info = loadBoothSeedInfo(boothId);
+  document.getElementById('genCountdown').textContent = offline
+    ? `rotates in ${secsLeft}s · OFFLINE — from cached seed (last synced ${info ? new Date(info.fetchedAt).toLocaleTimeString() : '—'})`
+    : `rotates in ${secsLeft}s`;
 }
 function startGenerator(){ refreshGenerator(); clearInterval(genTimer); genTimer = setInterval(refreshGenerator, 1000); }
 
