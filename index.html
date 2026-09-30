@@ -21,10 +21,6 @@
 <script src="vendor/qrcode.min.js"></script>
 <script src="vendor/supabase.js"></script>
 <style>
-  /* Status strips sit side by side on wider screens */
-  .status-row{display:grid;grid-template-columns:1fr;gap:0 10px;}
-  @media (min-width:480px){ .status-row{grid-template-columns:1fr 1fr;} }
-
   /* Stamp grid: each booth is a little ticket stub */
   .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
   @media (min-width:400px){ .grid{grid-template-columns:repeat(3,minmax(0,1fr));} }
@@ -92,6 +88,10 @@
       </div>
     </div>
 
+    <!-- Desktop: pass pinned on the left, stamps + scanner on the right.
+         Mobile: everything stacks in this order. -->
+    <div class="desk-split">
+    <aside class="desk-aside">
     <!-- Boarding pass: the attendee's badge. Only the QR is scannable; the
          barcodes are decoration. -->
     <section class="pass" aria-label="Your event pass">
@@ -131,6 +131,9 @@
         <div class="pass-num" id="passFootNum"></div>
       </div>
     </section>
+    </aside>
+
+    <div class="desk-main">
 
     <div class="card">
       <h3 class="card-title">Booth stamps</h3>
@@ -154,6 +157,8 @@
     <input type="file" accept="image/*" capture="environment" id="photoInput" style="display:none" onchange="onPhotoSelected(event)">
     <img id="snapPreview" alt="Last captured frame — check this for focus/framing if decoding keeps failing">
     <p class="demo-note" id="snapNote" style="display:none;">This is exactly what the scanner tried to read. If it looks blurry or too small here, that's a focus/distance problem, not a bug — back up a little or steady the phone.</p>
+    </div>
+    </div>
 
   </div>
 

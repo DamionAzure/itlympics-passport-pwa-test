@@ -48,6 +48,7 @@
 
   <div id="authGate"></div>
   <div id="gatedContent" style="display:none;">
+  <div class="desk-grid">
   <div class="card">
     <p style="font-size:13px;color:var(--text-muted);margin-top:0;">Scan an attendee's Passport badge QR at the gate. Works offline — a check-in scanned without wifi is queued and confirmed against the cloud once connected, so a duplicate from another gate still gets caught, just a little later.</p>
     <button class="btn-primary" id="scanBtn" onclick="toggleScanner()">Scan attendee badge</button>
@@ -60,7 +61,8 @@
 
   <div class="card">
     <h3 class="card-title">Recent check-ins <span id="checkinCount" style="color:var(--text-muted);font-weight:400;"></span></h3>
-    <div id="checkinFeed" style="max-height:260px;overflow-y:auto;"></div>
+    <div id="checkinFeed" style="max-height:460px;overflow-y:auto;"></div>
+  </div>
   </div>
 
   </div>

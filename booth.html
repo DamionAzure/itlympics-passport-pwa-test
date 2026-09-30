@@ -21,6 +21,11 @@
   #genQr{display:flex;justify-content:center;padding:12px;background:#fff;border:3px solid #111;border-radius:10px;}
   #genQr img,#genQr canvas{max-width:100%;height:auto;}
   #genCountdown{font-size:13px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;color:var(--pass-red);}
+  @media (min-width:900px){
+    .booth-layout .pass{max-width:620px;}
+    .booth-layout{grid-template-columns:minmax(300px,380px) minmax(0,1fr);}
+    .booth-layout > .pass{justify-self:center;width:100%;}
+  }
   #genRaw{font-family:var(--font-mono);font-size:11px;color:#666;word-break:break-all;text-align:center;}
 </style>
 </head>
@@ -50,6 +55,9 @@
 
   <div id="authGate"></div>
   <div id="gatedContent" style="display:none;">
+  <!-- Desktop: settings on the left, the big rotating code on the right. -->
+  <div class="desk-split booth-layout">
+  <aside class="desk-aside">
   <div class="card">
     <label for="boothSelect">This device is displaying for</label>
     <select id="boothSelect" onchange="onBoothChange()"></select>
@@ -57,6 +65,8 @@
     <input type="number" id="rotationInput" min="5" onchange="onRotationChange()">
     <p class="demo-note" style="margin-bottom:0;">This interval applies venue-wide — the Passport app reads the same setting when it validates a scan.</p>
   </div>
+  <p class="demo-note">Attendees scan this with their Passport app's camera to get stamped. The code rotates automatically. While this device has a connection, each code is generated and verified server-side against the booth secret; if venue wifi drops, it falls back to computing codes locally from the seed it cached the last time it was online (it needs to have been logged in and online once so the seed is cached). Only staff and admins can open this page.</p>
+  </aside>
 
   <section class="pass booth-pass" aria-label="Rotating booth code">
     <div class="pass-top">
@@ -73,8 +83,7 @@
       <div id="genRaw"></div>
     </div>
   </section>
-
-  <p class="demo-note">Attendees scan this with their Passport app's camera to get stamped. The code rotates automatically. While this device has a connection, each code is generated and verified server-side against the booth secret; if venue wifi drops, it falls back to computing codes locally from the seed it cached the last time it was online (it needs to have been logged in and online once so the seed is cached). Only staff and admins can open this page.</p>
+  </div>
   </div>
 
 </div>
