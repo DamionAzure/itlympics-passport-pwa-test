@@ -61,6 +61,11 @@
   </div>
 
   <div id="mainView" style="display:none;">
+    <div class="card" id="noCategoriesView" style="display:none;">
+      <p style="margin:0;">No voting categories are open right now — check back later.</p>
+    </div>
+
+    <div id="votingCards">
     <div class="cat-tabs" id="catTabs"></div>
 
     <div class="card">
@@ -75,6 +80,7 @@
       <h3 style="margin-top:0;font-size:14px;">Live results <span id="totalVotes" style="color:var(--text-muted);font-weight:400;"></span></h3>
       <div id="results"></div>
     </div>
+    </div>
   </div>
 
 </div>
@@ -83,13 +89,27 @@
 <script src="shared.js"></script>
 <script>
 let state = loadState(), cfg = loadCfg(), sb = null;
-let activeCategory = VOTE_CATEGORIES[0].id;
+let voteCategories = [];   // active categories, loaded from the DB (loadVoteCategories in shared.js)
+let activeCategory = null;
 const selected = {};   // categoryId -> candidateId picked but not yet cast
 const myVotes = {};    // categoryId -> candidateId already cast by this student
-const counts = {};     // categoryId -> {candidateId: n}
-VOTE_CATEGORIES.forEach(cat=>{ counts[cat.id] = {}; cat.candidates.forEach(c=>counts[cat.id][c.id]=0); });
+let counts = {};       // categoryId -> {candidateId: n}
 
-function categoryById(id){ return VOTE_CATEGORIES.find(c=>c.id===id); }
+function categoryById(id){ return voteCategories.find(c=>c.id===id); }
+function resetCounts(){
+  counts = {};
+  voteCategories.forEach(cat=>{ counts[cat.id] = {}; cat.candidates.forEach(c=>counts[cat.id][c.id]=0); });
+}
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+// Re-pulls the category list (admins may add/close categories mid-event).
+// Keeps the current tab if it still exists.
+async function refreshCategories(){
+  voteCategories = await loadVoteCategories(sb);
+  if(!categoryById(activeCategory)) activeCategory = voteCategories[0] ? voteCategories[0].id : null;
+  resetCounts();
+}
 
 function showToast(msg, warn){
   const t = document.getElementById('toast');
@@ -113,7 +133,7 @@ async function refreshTallies(){
   if(!sb) return;
   const {data, error} = await sb.rpc('vote_tally');
   if(error || !data) return;
-  VOTE_CATEGORIES.forEach(cat=>cat.candidates.forEach(c=>{ counts[cat.id][c.id] = 0; }));
+  resetCounts();
   data.forEach(r=>{ if(counts[r.category_id] && counts[r.category_id][r.candidate_id]!==undefined) counts[r.category_id][r.candidate_id] = Number(r.votes); });
   renderResults();
 }
@@ -121,10 +141,10 @@ async function refreshTallies(){
 function renderTabs(){
   const wrap = document.getElementById('catTabs');
   wrap.innerHTML = '';
-  VOTE_CATEGORIES.forEach(cat=>{
+  voteCategories.forEach(cat=>{
     const el = document.createElement('div');
     el.className = 'cat-tab' + (cat.id===activeCategory ? ' active' : '');
-    el.innerHTML = (myVotes[cat.id] ? '<span class="check">✓</span>' : '') + cat.title;
+    el.innerHTML = (myVotes[cat.id] ? '<span class="check">✓</span>' : '') + escapeHtml(cat.title);
     el.onclick = ()=>{ activeCategory = cat.id; renderAll(); };
     wrap.appendChild(el);
   });
@@ -132,6 +152,7 @@ function renderTabs(){
 
 function renderCandidates(){
   const cat = categoryById(activeCategory);
+  if(!cat) return;
   const voted = !!myVotes[activeCategory];
   const list = document.getElementById('candidateList');
   list.innerHTML = '';
@@ -150,6 +171,7 @@ function renderCandidates(){
 
 function renderResults(){
   const cat = categoryById(activeCategory);
+  if(!cat) return;
   const results = document.getElementById('results'), total = document.getElementById('totalVotes');
   const sum = Object.values(counts[activeCategory]).reduce((a,b)=>a+b,0);
   total.textContent = `(${sum} vote${sum===1?'':'s'})`;
@@ -159,13 +181,18 @@ function renderResults(){
     const pct = sum ? Math.round((n/sum)*100) : 0;
     const row = document.createElement('div');
     row.className = 'bar-row';
-    row.innerHTML = `<div class="bar-label"><span>${c.name}</span><span>${n} (${pct}%)</span></div>
+    row.innerHTML = `<div class="bar-label"><span>${escapeHtml(c.name)}</span><span>${n} (${pct}%)</span></div>
       <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>`;
     results.appendChild(row);
   });
 }
 
-function renderAll(){ renderTabs(); renderCandidates(); renderNetStatus(); renderResults(); }
+function renderAll(){
+  const empty = !voteCategories.length;
+  document.getElementById('noCategoriesView').style.display = empty ? 'block' : 'none';
+  document.getElementById('votingCards').style.display = empty ? 'none' : 'block';
+  renderTabs(); renderCandidates(); renderNetStatus(); renderResults();
+}
 
 async function castVote(){
   const catId = activeCategory;
@@ -183,6 +210,11 @@ async function castVote(){
         const {data} = await sb.from('votes').select('candidate_id').eq('student_id', state.studentId).eq('category_id', catId).single();
         myVotes[catId] = data ? data.candidate_id : candId;
         showToast('You already voted in this category', true);
+      } else if(error.code === '23503'){
+        // votes_check_candidate trigger: category was closed or entry removed since this page loaded
+        err.textContent = error.message; err.style.display='block';
+        delete selected[catId];
+        await refreshCategories(); await refreshTallies();
       } else {
         err.textContent = 'Could not reach the server: '+error.message;
         err.style.display='block';
@@ -214,10 +246,16 @@ async function initSb(){
 async function startVoting(profile){
   if(state.studentId !== profile.student_id){ state.studentId = profile.student_id; state.name = profile.name || profile.student_id; saveState(state); }
   document.getElementById('mainView').style.display='block';
-  try{ await refreshTallies(); await loadExistingVotes(); }catch(e){}
+  try{ await refreshCategories(); await refreshTallies(); await loadExistingVotes(); }catch(e){}
   renderAll();
 
   setInterval(()=>{ if(!document.hidden) refreshTallies(); }, 8000);   // live-ish totals; pauses while the tab is hidden
+  // Admin edits to categories/candidates show up without a reload (needs
+  // Realtime replication on those tables; otherwise they appear on next load).
+  let catTimer = null;
+  const onCatChange = ()=>{ clearTimeout(catTimer); catTimer = setTimeout(async ()=>{ await refreshCategories(); await refreshTallies(); renderAll(); }, 400); };
+  subscribeTable(sb, 'vote_categories', onCatChange);
+  subscribeTable(sb, 'vote_candidates', onCatChange);
 }
 
 // ---- init ----

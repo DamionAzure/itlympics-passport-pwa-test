@@ -1,4 +1,4 @@
-const CACHE_NAME = 'itlympics-passport-v22';
+const CACHE_NAME = 'itlympics-passport-v24';
 const APP_SHELL = [
   './', './login.html', './index.html', './booth.html', './testing.html', './skills.html', './entrance.html', './vote.html', './dashboard.html',
   './shared.js', './shared.css',

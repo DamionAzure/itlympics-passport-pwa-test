@@ -91,6 +91,30 @@
       <div id="unverifiedList"></div>
     </div>
 
+    <div class="card admin-only" id="roleMgmtCard" style="display:none;">
+      <h3 style="margin-top:0;font-size:14px;">Role Management</h3>
+      <p class="demo-note">Everyone starts as <strong>user</strong>. Promote to <strong>staff</strong> (booths, entrance, dashboard, testing) or <strong>admin</strong> (everything, including wiping data). They need to have logged in once already. Only admins can do this — enforced by the database, not just this panel.</p>
+      <input type="text" id="roleSearchInput" placeholder="Search by name, Student ID, or role…" oninput="renderRoleSearch()">
+      <div id="roleSearchCount" style="font-size:11px;color:var(--text-muted);margin:-8px 0 8px;"></div>
+      <div id="roleSearchResults" style="max-height:360px;overflow-y:auto;"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;font-size:14px;">Roster coverage</h3>
+      <p class="demo-note" style="margin-bottom:8px;">How much of the imported student roster has shown up. "Accounts not on roster" are logins whose Student ID isn't on the roster (typos, guests, or a roster that's out of date).</p>
+      <div id="rosterCoverage"></div>
+    </div>
+
+    <div class="card admin-only" id="rosterCard" style="display:none;">
+      <h3 style="margin-top:0;font-size:14px;">Roster import (CSV)</h3>
+      <p class="demo-note">Columns: <code>student_id, name, section</code>. A header row is optional, and columns can be in any order if you include one. Existing Student IDs are updated, new ones added, and nothing is deleted. Rows that fail the same ID/name checks as registration are skipped and listed below.</p>
+      <input type="file" id="rosterFile" accept=".csv,text/csv" onchange="onRosterFile(this)" style="margin-bottom:10px;font-size:13px;">
+      <label for="rosterText">…or paste CSV</label>
+      <textarea id="rosterText" rows="5" placeholder="student_id,name,section&#10;23-0123,Juan Dela Cruz,BSIT 2-1" oninput="previewRoster()" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font-family:monospace;font-size:12px;margin-bottom:10px;"></textarea>
+      <div id="rosterPreview" style="font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn-primary" id="rosterImportBtn" onclick="doRosterImport()" disabled>Import</button>
+    </div>
+
     <div class="card">
       <h3 style="margin-top:0;font-size:14px;">Voting leaderboards</h3>
       <div id="voteBreakdown"></div>
@@ -122,13 +146,16 @@ function barRow(label, n, denom){
 async function loadAll(){
   if(!sb) return;
   try{
-    const [studentsRes, skillsRes, stampsRes, checkinsRes, votesRes] = await Promise.all([
+    const [studentsRes, skillsRes, stampsRes, checkinsRes, votesRes, voteCats, coverageRes] = await Promise.all([
       sb.from('profiles').select('student_id', {count:'exact', head:true}),
       sb.from('skills_registrations').select('student_id, section'),
       sb.from('stamps').select('student_id, booth_id, received_at, verified'),
       sb.from('checkins').select('student_id', {count:'exact', head:true}),
       sb.from('votes').select('category_id, candidate_id'),
+      loadVoteCategories(sb, {includeInactive:true}),
+      sb.rpc('roster_coverage'),
     ]);
+    renderRosterCoverage(coverageRes);
 
     const studentCount = studentsRes.count || 0;
     const skillsRows = skillsRes.data || [];
@@ -184,22 +211,88 @@ async function loadAll(){
     // ---- voting leaderboards, one per category ----
     const voteEl = document.getElementById('voteBreakdown');
     voteEl.innerHTML = '';
-    VOTE_CATEGORIES.forEach(cat=>{
+    if(!voteCats.length) voteEl.textContent = 'No voting categories set up yet (Testing > Manage vote categories).';
+    voteCats.forEach(cat=>{
       const heading = document.createElement('div');
       heading.className = 'cat-heading';
       const catVotes = voteRows.filter(v=>v.category_id===cat.id);
-      heading.textContent = `${cat.title} (${catVotes.length})`;
+      heading.textContent = `${cat.title} (${catVotes.length})` + (cat.active===false ? ' — closed' : '');
       voteEl.appendChild(heading);
       const counts = {};
       cat.candidates.forEach(c=>counts[c.id]=0);
       catVotes.forEach(v=>{ if(counts[v.candidate_id]!==undefined) counts[v.candidate_id]++; });
-      cat.candidates.forEach(c=>voteEl.appendChild(barRow(c.name, counts[c.id], catVotes.length)));
+      cat.candidates.forEach(c=>voteEl.appendChild(barRow(escapeHtml(c.name), counts[c.id], catVotes.length)));
     });
 
     document.getElementById('lastUpdated').textContent = 'Last updated ' + new Date().toLocaleTimeString();
   }catch(e){
     document.getElementById('lastUpdated').textContent = 'Refresh failed: ' + e.message;
   }
+}
+
+// ---- roster coverage (counts come from roster_coverage() in schema.sql) ----
+function renderRosterCoverage(res){
+  const el = document.getElementById('rosterCoverage');
+  if(res.error){ el.textContent = 'Roster not available yet — re-run schema.sql to add it. ('+res.error.message+')'; return; }
+  const r = Array.isArray(res.data) ? res.data[0] : res.data;
+  const total = Number(r && r.roster_total) || 0;
+  el.innerHTML = '';
+  if(!total){ el.textContent = 'No roster imported yet.'; return; }
+  el.appendChild(barRow('Made a Passport login', Number(r.with_account), total));
+  el.appendChild(barRow('Checked in at Entrance', Number(r.checked_in), total));
+  el.appendChild(barRow('Skills registered', Number(r.skills_registered), total));
+  const extra = document.createElement('div');
+  extra.className = 'review-meta'; extra.style.fontSize = '12px';
+  extra.textContent = `${total} on roster · ${Number(r.accounts_not_on_roster)} account(s) not on roster`;
+  el.appendChild(extra);
+}
+
+// ---- roster CSV import (admin; the roster table's RLS enforces that) ----
+let rosterParsed = null;
+function onRosterFile(input){
+  const file = input.files && input.files[0]; if(!file) return;
+  if(file.size > 5*1024*1024){ alert('That file is over 5 MB — is it really a roster CSV?'); input.value=''; return; }
+  const reader = new FileReader();
+  reader.onload = ()=>{ document.getElementById('rosterText').value = reader.result; previewRoster(); };
+  reader.readAsText(file);
+}
+function previewRoster(){
+  const text = document.getElementById('rosterText').value;
+  const el = document.getElementById('rosterPreview'), btn = document.getElementById('rosterImportBtn');
+  rosterParsed = text.trim() ? buildRoster(parseCsv(text)) : null;
+  if(!rosterParsed){ el.innerHTML = ''; btn.disabled = true; return; }
+  const {valid, errors, duplicates} = rosterParsed;
+  let html = `<div><strong>${valid.length}</strong> row(s) ready` +
+    (duplicates ? ` · ${duplicates} duplicate ID(s) in file (last one kept)` : '') +
+    (errors.length ? ` · <span style="color:var(--danger);">${errors.length} skipped</span>` : '') + '</div>';
+  if(valid.length){
+    html += '<div class="review-meta" style="margin-top:4px;">First rows: ' +
+      valid.slice(0,3).map(v=>escapeHtml(`${v.student_id} ${v.name}${v.section?' ('+v.section+')':''}`)).join(' · ') + '</div>';
+  }
+  if(errors.length){
+    html += '<div style="max-height:140px;overflow-y:auto;margin-top:6px;font-family:monospace;font-size:11px;color:var(--danger);">' +
+      errors.slice(0,200).map(e=>`Line ${e.line}: ${escapeHtml(e.msg)}`).join('<br>') +
+      (errors.length>200 ? `<br>…and ${errors.length-200} more` : '') + '</div>';
+  }
+  el.innerHTML = html;
+  btn.disabled = !valid.length;
+  btn.textContent = valid.length ? `Import ${valid.length} student(s)` : 'Import';
+}
+async function doRosterImport(){
+  if(!rosterParsed || !rosterParsed.valid.length) return;
+  const btn = document.getElementById('rosterImportBtn');
+  if(!confirm(`Import ${rosterParsed.valid.length} student(s) into the roster? Existing IDs will be updated.`)) return;
+  btn.disabled = true;
+  const res = await importRoster(sb, rosterParsed.valid, (done,total)=>{ btn.textContent = `Importing… ${done}/${total}`; });
+  if(!res.ok){
+    alert(`Import stopped after ${res.written} row(s): ${res.error}`);
+    btn.disabled = false; btn.textContent = 'Retry import';
+    return;
+  }
+  document.getElementById('rosterText').value = ''; document.getElementById('rosterFile').value = '';
+  previewRoster();
+  document.getElementById('rosterPreview').textContent = `Imported ${res.written} student(s).`;
+  loadAll();
 }
 
 // Staff spot-check: clears the unverified flag on one stamp once someone's
@@ -226,8 +319,13 @@ async function markVerified(studentId, boothId, btn){
 // Debounced so a burst of scans/votes doesn't fire a refresh per row.
 function scheduleRefresh(){
   clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(loadAll, 500);
+  refreshTimer = setTimeout(()=>{
+    loadAll();
+    if(myProfile && myProfile.role==='admin') loadProfilesForRoles();
+  }, 500);
 }
+
+let myProfile = null;
 
 function initSb(){
   sb = initSupabase(cfg);
@@ -237,11 +335,85 @@ function initSb(){
   // whole team can look at it). Read access to stamps/checkins/etc. is
   // itself restricted to staff+ by the database, not just hidden here.
   mountAuthGate(sb, {containerId:'authGate', minRole:'staff', onReady:(profile)=>{
+    myProfile = profile;
     document.getElementById('mainView').style.display='block';
     document.getElementById('cloudLabel').textContent = `Signed in: ${profile.name||profile.student_id} (${profile.role})`;
+    if(profile.role==='admin'){
+      document.getElementById('roleMgmtCard').style.display='block';
+      document.getElementById('rosterCard').style.display='block';
+      loadProfilesForRoles();
+    }
     loadAll();
-    ['profiles','skills_registrations','stamps','checkins','votes'].forEach(t=>subscribeTable(sb, t, scheduleRefresh));
+    ['profiles','skills_registrations','stamps','checkins','votes','vote_categories','vote_candidates','roster'].forEach(t=>subscribeTable(sb, t, scheduleRefresh));
   }});
+}
+
+// ---- Role Management (admin only, enforced server-side by set_user_role) ----
+// A simple fuzzy match: an exact substring wins outright (ranked by how
+// early it appears), otherwise all of the query's characters must still
+// appear in order somewhere in the text, with a bonus for runs of
+// consecutive matches — so "sam23" beats "s2a3m" against "23-0100 Sam".
+// Good enough for a few hundred names; not trying to be a spell-checker.
+function fuzzyScore(query, text){
+  query = (query||'').toLowerCase().trim(); text = (text||'').toLowerCase();
+  if(!query) return 0;
+  const hit = text.indexOf(query);
+  if(hit !== -1) return 1000 - hit;
+  let qi = 0, score = 0, lastMatch = -1;
+  for(let ti=0; ti<text.length && qi<query.length; ti++){
+    if(text[ti] === query[qi]){
+      score += (lastMatch === ti-1) ? 3 : 1;
+      lastMatch = ti; qi++;
+    }
+  }
+  return qi===query.length ? score : -1;
+}
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+let allProfiles = [];
+async function loadProfilesForRoles(){
+  if(!sb) return;
+  const {data, error} = await sb.from('profiles').select('student_id, name, role').order('student_id');
+  if(error){ document.getElementById('roleSearchResults').textContent = 'Could not load accounts: '+error.message; return; }
+  allProfiles = data || [];
+  renderRoleSearch();
+}
+function renderRoleSearch(){
+  const q = document.getElementById('roleSearchInput').value;
+  const scored = allProfiles
+    .map(p => ({p, score: Math.max(fuzzyScore(q, p.student_id), fuzzyScore(q, p.name), fuzzyScore(q, p.role))}))
+    .filter(x => x.score >= 0)
+    .sort((a,b) => b.score - a.score)
+    .slice(0, 100);
+  document.getElementById('roleSearchCount').textContent =
+    `${scored.length} of ${allProfiles.length} account${allProfiles.length===1?'':'s'}` + (scored.length===100 ? ' (showing top 100 — narrow your search)' : '');
+  const el = document.getElementById('roleSearchResults');
+  if(!scored.length){ el.innerHTML = '<div style="color:var(--text-muted);padding:6px 0;">No matching accounts.</div>'; return; }
+  el.innerHTML = scored.map(({p}) => {
+    const sid = escapeHtml(p.student_id);
+    const selId = 'role-sel-' + CSS.escape(p.student_id);
+    return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line);">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(p.name || '(no name)')}</div>
+        <div style="font-size:11px;color:var(--text-muted);">${sid} · <strong>${escapeHtml(p.role)}</strong></div>
+      </div>
+      <select id="${selId}" style="width:auto;margin:0;padding:6px;font-size:12px;">
+        <option value="user" ${p.role==='user'?'selected':''}>user</option>
+        <option value="staff" ${p.role==='staff'?'selected':''}>staff</option>
+        <option value="admin" ${p.role==='admin'?'selected':''}>admin</option>
+      </select>
+      <button class="btn-ghost" style="padding:6px 10px;font-size:12px;" onclick="applyRoleFor('${sid.replace(/'/g,"\\\\'")}')">Set</button>
+    </div>`;
+  }).join('');
+}
+async function applyRoleFor(studentId){
+  const role = document.getElementById('role-sel-' + CSS.escape(studentId)).value;
+  if(studentId === myProfile.student_id && role !== 'admin' && !confirm('You are about to demote your own account. Continue?')) return;
+  const ok = await setUserRole(sb, studentId, role);
+  if(!ok){ alert('Failed — you may not be an admin, or this would remove the last admin.'); return; }
+  await loadProfilesForRoles();
 }
 
 // ---- init ----

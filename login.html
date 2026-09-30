@@ -132,6 +132,12 @@ async function continueLogin(){
     document.getElementById('registerFields').style.display='block';
     ['nameInput','newPinInput','confirmPinInput'].forEach(i=>document.getElementById(i).value='');
     document.getElementById('nameInput').focus();
+    const rosterName = await rosterLookup(sb, id);   // prefill only — never blocks signup if it's null
+    if(rosterName && pendingId===id){                // still on this ID (didn't go back/retype meanwhile)
+      document.getElementById('nameInput').value = rosterName;
+      document.getElementById('greeting').textContent = `Welcome, ${rosterName} — set up your login.`;
+      document.getElementById('newPinInput').focus();
+    }
   }
 }
 function backToStep1(){

@@ -177,19 +177,24 @@ async function pullFromCloud(){
     saveState(state); renderMain();
   }catch(e){ log('Cloud pull failed: '+e.message); }
 }
+// Was a raw sb.from('stamps').upsert(...) with a client-decided `verified`
+// flag — trivially forgeable (any booth_id, verified:true, from devtools).
+// Now goes through claim_stamp_offline, which stamps the CALLER's own
+// account only and always writes verified:false (an offline claim can never
+// be cryptographically checked after the fact — see shared.js). A genuine
+// forged/expired code was already rejected at scan time in handleScannedText
+// before it ever reaches this queue.
 async function pushOne(boothId){
   if(!sb) return false;
-  try{
-    const verified = !(state.stamps[boothId] && state.stamps[boothId].pendingVerify);
-    const {data, error} = await sb.from('stamps').upsert({student_id: state.studentId, booth_id: boothId, verified}).select('received_at').single();
-    if(error) throw error;
-    if(state.stamps[boothId]) state.stamps[boothId].receivedAt = (data && data.received_at) ? new Date(data.received_at).getTime() : Date.now();
-    return true;
-  }catch(e){
-    log('Cloud write failed: '+e.message);
-    showToast('⚠️ Stamp not synced: '+e.message, true);
+  const res = await claimStampOffline(sb, boothId);
+  if(!res || !res.ok){
+    const reason = (res && res.reason) || 'unknown error';
+    log('Cloud write failed for '+boothId+': '+reason);
+    showToast('⚠️ Stamp not synced: '+reason, true);
     return false;
   }
+  if(state.stamps[boothId]) state.stamps[boothId].receivedAt = Date.now();
+  return true;
 }
 async function maybeSync(){
   renderNetStatus();
@@ -256,14 +261,18 @@ function renderMain(){
   renderNetStatus(); renderCloudStatus();
 }
 
-function addStamp(boothId, boothName, notSure, pendingVerify){
-  if(state.stamps[boothId]){ showToast(`Already stamped: ${boothName}`); return; }
-  state.stamps[boothId] = {scannedAt: Date.now(), receivedAt: null, notSure: !!notSure, pendingVerify: !!pendingVerify};
-  state.pendingSync.push(boothId);
+// alreadySynced=true means claimStamp() already committed this to the
+// database in the same call that told us it was ok — this is just local
+// bookkeeping, not another write. Only the offline path (alreadySynced
+// false/omitted) still queues a follow-up claimStampOffline() call.
+function addStamp(boothId, boothName, notSure, pendingVerify, alreadySynced){
+  if(state.stamps[boothId]){ if(alreadySynced) showToast(`Already stamped: ${boothName}`); return; }
+  state.stamps[boothId] = {scannedAt: Date.now(), receivedAt: alreadySynced ? Date.now() : null, notSure: !!notSure, pendingVerify: !!pendingVerify};
+  if(!alreadySynced) state.pendingSync.push(boothId);
   saveState(state); renderMain();
   const label = pendingVerify ? '📡 Offline — queued: ' : (notSure ? '⏳ Not sure — grace period stamp: ' : 'Stamp added: ');
   showToast(label+boothName + (state.online && sb ? '' : ' (queued)'), !!notSure || !!pendingVerify);
-  maybeSync();
+  if(!alreadySynced) maybeSync();
 }
 
 function renderNetStatus(){
@@ -370,8 +379,8 @@ async function handleScannedText(text){
     return;
   }
 
-  const result = await validateBoothCode(sb, text, loadRotation(), geo.lat, geo.lng);
-  if(result.ok){ addStamp(result.booth.id, result.booth.name, result.notSure); return; }
+  const result = await claimStamp(sb, text, loadRotation(), geo.lat, geo.lng);
+  if(result.ok){ addStamp(result.booth.id, result.booth.name, result.notSure, false, true); return; }
 
   if(result.offline){
     if(result.booth){

@@ -1,0 +1,3 @@
+# Database setup — run in the Supabase SQL editor, never served by the site.
+schema.sql
+*.sql

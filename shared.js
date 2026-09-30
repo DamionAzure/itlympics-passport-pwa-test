@@ -118,10 +118,14 @@ async function loadSections(sb){
   }catch(e){ return SECTIONS_FALLBACK; }
 }
 
-// ---- Game Con voting categories (placeholder candidates — swap for the
-// real nominee lists once known; Best Booth reuses the existing BOOTHS list
-// since those nominees already exist elsewhere in this app) ----
-const VOTE_CATEGORIES = [
+// ---- Game Con voting categories ----
+// Live in the `vote_categories` + `vote_candidates` tables (see
+// schema.sql) and are edited by admins from
+// Testing > Manage vote categories — no redeploy. VOTE_CATEGORIES_FALLBACK is
+// only used when there's no cloud connection or the tables don't exist yet;
+// it matches the SQL seed, so ids line up with any votes already cast.
+const VOTE_CATS_KEY = 'itlympics_vote_categories_v1';
+const VOTE_CATEGORIES_FALLBACK = [
   {id:'pc-hybrid', title:"People's Choice Award — Hybrid Game", candidates:[
     {id:'h1', name:'Entry 1'}, {id:'h2', name:'Entry 2'}, {id:'h3', name:'Entry 3'}, {id:'h4', name:'Entry 4'},
   ]},
@@ -132,7 +136,120 @@ const VOTE_CATEGORIES = [
     {id:'bn1', name:'Entry 1'}, {id:'bn2', name:'Entry 2'}, {id:'bn3', name:'Entry 3'}, {id:'bn4', name:'Entry 4'},
   ]},
   {id:'best-booth', title:'Special GAMECON Award — Best Booth', candidates: BOOTHS.map(b=>({id:b.id, name:b.name}))},
-];
+].map((c,i)=>({...c, sortOrder:i+1, active:true}));
+
+// Returns [{id, title, sortOrder, active, candidates:[{id, name, sortOrder}]}]
+// sorted for display. opts.includeInactive keeps closed categories (the
+// Dashboard and admin editor want them; the Vote page doesn't). Falls back
+// to the last list this device saw, then to the hardcoded fallback.
+function _cachedVoteCategories(){
+  try{ const r = localStorage.getItem(VOTE_CATS_KEY); if(r){ const v = JSON.parse(r); if(Array.isArray(v) && v.length) return v; } }catch(e){}
+  return VOTE_CATEGORIES_FALLBACK;
+}
+async function loadVoteCategories(sb, opts){
+  opts = opts || {};
+  let list = null;
+  if(sb){
+    try{
+      const [catRes, candRes] = await Promise.all([
+        sb.from('vote_categories').select('id, title, sort_order, active'),
+        sb.from('vote_candidates').select('category_id, id, name, sort_order'),
+      ]);
+      if(catRes.error) throw catRes.error;
+      if(candRes.error) throw candRes.error;
+      if(catRes.data && catRes.data.length){
+        list = catRes.data.map(c=>({
+          id:c.id, title:c.title, sortOrder:c.sort_order, active:c.active,
+          candidates:(candRes.data||[]).filter(x=>x.category_id===c.id)
+            .map(x=>({id:x.id, name:x.name, sortOrder:x.sort_order}))
+            .sort((a,b)=>a.sortOrder-b.sortOrder || a.name.localeCompare(b.name)),
+        }));
+        try{ localStorage.setItem(VOTE_CATS_KEY, JSON.stringify(list)); }catch(e){}
+      }
+    }catch(e){ console.warn('loadVoteCategories failed, using cached/fallback list', e); }
+  }
+  if(!list) list = _cachedVoteCategories();
+  list = list.slice().sort((a,b)=>(a.sortOrder||0)-(b.sortOrder||0) || a.title.localeCompare(b.title));
+  return opts.includeInactive ? list : list.filter(c=>c.active!==false);
+}
+// "People's Choice — Hybrid" -> "peoples-choice-hybrid". Used to mint ids for
+// new categories/candidates; matches the SQL check ^[a-z0-9][a-z0-9-]{0,39}$.
+function slugify(s){
+  return (s||'').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/['’]/g,'')
+    .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,32) || 'item';
+}
+function uniqueSlug(base, taken){
+  const set = new Set(taken); let id = slugify(base), n = 2;
+  while(set.has(id)) id = slugify(base).slice(0,28) + '-' + (n++);
+  return id;
+}
+
+// ---- CSV parsing (roster import) ----
+// RFC 4180-ish: quoted fields, "" escapes, commas/newlines inside quotes,
+// CRLF or LF, optional UTF-8 BOM (Excel adds one). Returns an array of rows.
+function parseCsv(text){
+  text = String(text||'').replace(/^\uFEFF/, '');
+  const rows = []; let row = [], field = '', inQuotes = false;
+  for(let i=0;i<text.length;i++){
+    const ch = text[i];
+    if(inQuotes){
+      if(ch==='"'){ if(text[i+1]==='"'){ field+='"'; i++; } else inQuotes = false; }
+      else field += ch;
+    } else if(ch==='"'){ inQuotes = true; }
+    else if(ch===','){ row.push(field); field=''; }
+    else if(ch==='\n' || ch==='\r'){
+      if(ch==='\r' && text[i+1]==='\n') i++;
+      row.push(field); rows.push(row); row=[]; field='';
+    } else field += ch;
+  }
+  if(field!=='' || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(r=>r.some(c=>c.trim()!==''));
+}
+// Turns parsed CSV rows into validated roster entries. Accepts a header row
+// (any order; recognises student_id/id/student id, name/full name,
+// section/course) or, with no header, columns in the order id, name, section.
+// Returns {valid:[{student_id,name,section}], errors:[{line, msg}], duplicates}.
+function buildRoster(rows){
+  const out = {valid:[], errors:[], duplicates:0};
+  if(!rows.length) return out;
+  const norm = h => h.toLowerCase().replace(/[^a-z]/g,'');
+  const head = rows[0].map(norm);
+  const find = keys => head.findIndex(h=>keys.includes(h));
+  let idCol = find(['studentid','id','studentno','studentnumber','idnumber']);
+  let nameCol = find(['name','fullname','studentname']);
+  let secCol = find(['section','course','coursesection','yearsection']);
+  let start = 1;
+  if(idCol===-1 || nameCol===-1){ idCol = 0; nameCol = 1; secCol = rows[0].length > 2 ? 2 : -1; start = 0; }
+  const seen = new Map();
+  for(let i=start;i<rows.length;i++){
+    const r = rows[i], line = i+1;
+    const student_id = (r[idCol]||'').trim();
+    const name = (r[nameCol]||'').trim().replace(/\s+/g,' ');
+    const section = secCol>=0 ? ((r[secCol]||'').trim().replace(/\s+/g,' ') || null) : null;
+    const idErr = validateStudentId(student_id);
+    if(idErr){ out.errors.push({line, msg:`"${student_id||'(blank)'}" — ${idErr}`}); continue; }
+    const nameErr = validateName(name);
+    if(nameErr){ out.errors.push({line, msg:`${student_id}: "${name||'(blank)'}" — ${nameErr}`}); continue; }
+    if(seen.has(student_id)) out.duplicates++; // last one in the file wins
+    seen.set(student_id, {student_id, name, section});
+  }
+  out.valid = [...seen.values()];
+  return out;
+}
+// Upserts in chunks so a few thousand rows don't hit request-size limits.
+// onProgress(done, total). Returns {ok, written, error?}.
+async function importRoster(sb, entries, onProgress){
+  if(!sb) return {ok:false, written:0, error:'Cloud backend not connected'};
+  const CHUNK = 500; let written = 0;
+  for(let i=0;i<entries.length;i+=CHUNK){
+    const chunk = entries.slice(i, i+CHUNK);
+    const {error} = await sb.from('roster').upsert(chunk, {onConflict:'student_id'});
+    if(error) return {ok:false, written, error:error.message};
+    written += chunk.length;
+    if(onProgress) onProgress(written, entries.length);
+  }
+  return {ok:true, written};
+}
 
 // First token of a "COURSE YEAR-SECTION" string, e.g. "BSIT 2-1" -> "BSIT".
 // Shared by Testing's live feed and the Dashboard's section breakdown so
@@ -254,6 +371,17 @@ async function accountExists(sb, studentId){
     if(error) throw error;
     return {exists: !!data};
   }catch(e){ return {reason: "Couldn't check that ID: " + e.message + " (has the RBAC SQL been run?)"}; }
+}
+// Prefill only, never a gate: returns the roster's name for a new signup, or
+// null if they're not on it (or it hasn't been imported yet) — either way,
+// login.html just falls back to an empty, freely-editable name field.
+async function rosterLookup(sb, studentId){
+  if(!sb) return null;
+  try{
+    const {data, error} = await sb.rpc('roster_lookup', {p_student_id: studentId.trim()});
+    if(error) throw error;
+    return data || null;
+  }catch(e){ return null; }
 }
 async function signInWithIdPin(sb, studentId, pin){
   const {error} = await sb.auth.signInWithPassword({email: studentIdToEmail(studentId), password: pin});
@@ -475,6 +603,46 @@ async function validateBoothCode(sb, text, rotationSeconds, lat, lng){
   if(!row) return {ok:false, reason:'Verification failed — try again', booth};
   const rowBooth = row.booth_id ? BOOTHS.find(b=>b.id===row.booth_id) : booth;
   return {ok:row.ok, reason:row.reason, notSure:row.not_sure, booth:rowBooth};
+}
+
+// Commits a real attendance stamp for the CALLING account — never a
+// client-supplied student_id, the server reads it from the session — after
+// re-validating the code's signature, time window, and geofence server-side
+// in the same call. This is now the only way a stamp for a plain user gets
+// written: direct insert/update on `stamps` is revoked for everyone but
+// staff+ (see schema.sql), since a client-decided "verified" flag on a raw
+// upsert was just an unchecked claim — open devtools, call
+// supabase.from('stamps').upsert(...) with any booth_id and verified:true,
+// and it wrote. Stamps are attendance, so that had to close. Same
+// {ok, booth, notSure, reason} shape as validateBoothCode, plus `already`.
+async function claimStamp(sb, text, rotationSeconds, lat, lng){
+  if(!text || !text.startsWith('BOOTH:')) return {ok:false, reason:'Not a booth code'};
+  const parts = text.split(':');
+  const booth = parts.length===4 ? BOOTHS.find(b=>b.id===parts[1]) : undefined;
+  if(!sb) return {ok:false, offline:true, reason:"Can't claim right now — cloud backend not connected", booth};
+  let data, error;
+  try{ ({data, error} = await sb.rpc('claim_stamp', {p_raw_code: text, p_rotation_seconds: rotationSeconds, p_lat: lat ?? null, p_lng: lng ?? null})); }
+  catch(e){ error = e; }
+  if(error){ console.error('claim_stamp failed', error); return {ok:false, offline:true, reason:'Verification failed — no connection', booth}; }
+  const row = Array.isArray(data) ? data[0] : data;
+  if(!row) return {ok:false, reason:'Verification failed — try again', booth};
+  const rowBooth = row.booth_id ? BOOTHS.find(b=>b.id===row.booth_id) : booth;
+  return {ok:row.ok, reason:row.reason, notSure:row.not_sure, already:row.already, booth:rowBooth};
+}
+// Offline fallback: the phone never holds a booth secret (only a Booth
+// Display device caches one), so there's no signature to check at all — this
+// just confirms the booth ID is real and records an unverified claim under
+// the caller's own account, same as claimStamp's rejection-proof design:
+// the student_id always comes from the session, never a parameter, so this
+// can't be used to stamp anyone but yourself either.
+async function claimStampOffline(sb, boothId){
+  if(!sb) return {ok:false, reason:'No connection'};
+  try{
+    const {data, error} = await sb.rpc('claim_stamp_offline', {p_booth_id: boothId});
+    if(error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    return row || {ok:false, reason:'No response'};
+  }catch(e){ return {ok:false, reason:e.message}; }
 }
 
 // ---- geofence (campus-only scanning) ----
