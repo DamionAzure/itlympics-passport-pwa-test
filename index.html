@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1F3A5F">
+<meta name="theme-color" content="#111111">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>ITLympics Passport</title>
-<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="shared.css">
 <!-- jsQR and qrcode.js are vendored locally (./vendor/) rather than loaded from
      cdnjs — on at least one tested network cdnjs.cloudflare.com wasn't
@@ -21,27 +21,42 @@
 <script src="vendor/qrcode.min.js"></script>
 <script src="vendor/supabase.js"></script>
 <style>
-  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
-  .stamp-slot{aspect-ratio:1;border:2px dashed var(--line);border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:6px;position:relative;overflow:hidden;}
-  .stamp-slot.filled{border:2px solid var(--amber);background:color-mix(in srgb, var(--amber) 10%, transparent);}
+  /* Status strips sit side by side on wider screens */
+  .status-row{display:grid;grid-template-columns:1fr;gap:0 10px;}
+  @media (min-width:480px){ .status-row{grid-template-columns:1fr 1fr;} }
+
+  /* Stamp grid: each booth is a little ticket stub */
+  .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+  @media (min-width:400px){ .grid{grid-template-columns:repeat(3,minmax(0,1fr));} }
+  .stamp-slot{position:relative;overflow:hidden;aspect-ratio:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:8px;text-align:center;border:2px dashed var(--line);border-radius:10px;transition:border-color var(--dur) var(--ease),background-color var(--dur) var(--ease);}
+  .stamp-slot.filled{border:2px solid var(--ink);background:var(--paper-card);}
   .stamp-slot.not-sure{border-color:var(--danger);}
-  .stamp-slot.pending-verify{border-color:var(--amber);}
-  .pending-ribbon{position:absolute;top:9px;left:-30px;width:110px;transform:rotate(-45deg);background:var(--amber);color:#fff;font-size:9px;font-weight:700;letter-spacing:.03em;text-align:center;padding:2px 0;box-shadow:0 1px 3px rgba(0,0,0,.3);}
-  .stamp-slot .name{font-size:11px;color:var(--text-muted);}
-  .stamp-slot.filled .name{color:var(--ink);font-weight:500;}
-  .stamp-mark{font-family:"Special Elite",monospace;color:var(--amber);font-size:13px;border:2px solid var(--amber);border-radius:6px;padding:2px 6px;transform:rotate(-8deg);margin-top:4px;}
-  .stamp-meta{font-size:9px;color:var(--text-muted);margin-top:3px;line-height:1.4;}
-  .not-sure-ribbon{position:absolute;top:9px;left:-30px;width:110px;transform:rotate(-45deg);background:var(--danger);color:#fff;font-size:9px;font-weight:700;letter-spacing:.03em;text-align:center;padding:2px 0;box-shadow:0 1px 3px rgba(0,0,0,.3);}
-  .progress{font-size:13px;color:var(--text-muted);margin:14px 0 4px;}
-  .scan-area{background:#000;border-radius:12px;overflow:hidden;position:relative;margin-bottom:12px;display:none;}
-  .scan-area.active{display:block;}
-  video{width:100%;display:block;}
-  .scan-frame{position:absolute;inset:20%;border:2px solid var(--amber);border-radius:8px;pointer-events:none;}
-  .badge-row{display:flex;align-items:center;gap:14px;}
-  #badgeQr{border-radius:8px;overflow:hidden;flex-shrink:0;background:#fff;padding:8px;cursor:pointer;}
-  .qr-modal-card{background:#fff;border-radius:16px;padding:16px;display:flex;flex-direction:column;align-items:center;gap:14px;max-width:96vw;}
-  #badgeQrLarge{line-height:0;background:#fff;padding:16px;border-radius:12px;}
-  .qr-modal-hint{font-size:12px;color:var(--text-muted);text-align:center;}
+  .stamp-slot.pending-verify{border-color:var(--warn);}
+  .stamp-slot .name{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);}
+  .stamp-slot.filled .name{color:var(--ink);}
+  .stamp-mark{margin-top:2px;padding:2px 6px;border:2.5px solid var(--amber);border-radius:4px;color:var(--amber);font-size:12px;font-weight:900;letter-spacing:.06em;max-width:100%;transform:rotate(-8deg);animation:stamp-in .35s var(--ease);}
+  .stamp-meta{font-family:var(--font-mono);font-size:9px;line-height:1.4;color:var(--text-muted);}
+  .pending-ribbon,.not-sure-ribbon{position:absolute;top:10px;left:-30px;width:110px;padding:2px 0;transform:rotate(-45deg);color:#fff;font-size:9px;font-weight:800;letter-spacing:.08em;text-align:center;text-transform:uppercase;box-shadow:0 1px 3px rgba(0,0,0,.3);}
+  .pending-ribbon{background:var(--warn);}
+  .not-sure-ribbon{background:var(--danger);}
+  @keyframes stamp-in{from{opacity:0;transform:rotate(-8deg) scale(1.6);}to{opacity:1;transform:rotate(-8deg) scale(1);}}
+  .progress{margin:14px 0 12px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted);}
+
+  /* Scanner */
+  .scan-actions{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;}
+  .scan-area{display:none;position:relative;overflow:hidden;margin-bottom:12px;border-radius:var(--radius);background:#000;}
+  .scan-area.active{display:block;animation:modal-fade var(--dur) var(--ease);}
+  video{display:block;width:100%;}
+  .scan-frame{position:absolute;inset:20%;border:3px solid var(--amber);border-radius:8px;pointer-events:none;box-shadow:0 0 0 999px rgba(0,0,0,.35);}
+  #scanDebug{margin:-4px 0 12px;font-family:var(--font-mono);font-size:11px;color:var(--text-muted);text-align:center;}
+  #snapPreview{display:none;width:100%;margin-bottom:12px;border:1px solid var(--line);border-radius:var(--radius-sm);}
+
+  /* Enlarged QR modal — always white so it scans in dark mode too */
+  .qr-modal-card{position:relative;display:flex;flex-direction:column;align-items:center;gap:12px;max-width:96vw;padding:18px;border-radius:18px;background:#fff;color:#111;box-shadow:0 20px 60px rgba(0,0,0,.4);}
+  #badgeQrLarge{line-height:0;padding:14px;background:#fff;border:3px solid #111;border-radius:10px;}
+  .qr-modal-name{font-size:18px;font-weight:900;letter-spacing:.04em;text-transform:uppercase;}
+  .qr-modal-id{font-family:var(--font-mono);font-size:14px;letter-spacing:.1em;color:#555;}
+  .qr-modal-hint{margin:0;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#777;}
 </style>
 </head>
 <body>
@@ -67,53 +82,87 @@
 
   <div id="mainView" style="display:none;">
 
-    <div class="status-bar">
-      <div><span class="dot" id="netDot"></span><span id="netLabel">Venue wifi: checking...</span></div>
-      <div class="toggle" id="netToggle" onclick="toggleNet()"><div class="knob"></div></div>
-    </div>
-    <div class="status-bar">
-      <div id="cloudLabel">Cloud backend: not configured</div>
-    </div>
-
-    <div class="card">
-      <div class="badge-row" onclick="openBadgeQr()">
-        <div id="badgeQr"></div>
-        <div>
-          <div style="font-size:15px;font-weight:500;" id="badgeName"></div>
-          <div style="font-size:12px;color:var(--text-muted);" id="badgeId"></div>
-          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Show this at the alumni / entrance gate — tap to enlarge</div>
-        </div>
+    <div class="status-row">
+      <div class="status-bar">
+        <div><span class="dot" id="netDot"></span><span id="netLabel">Venue wifi: checking...</span></div>
+        <div class="toggle" id="netToggle" onclick="toggleNet()" role="switch" aria-label="Simulate venue wifi"><div class="knob"></div></div>
+      </div>
+      <div class="status-bar">
+        <div id="cloudLabel">Cloud backend: not configured</div>
       </div>
     </div>
 
+    <!-- Boarding pass: the attendee's badge. Only the QR is scannable; the
+         barcodes are decoration. -->
+    <section class="pass" aria-label="Your event pass">
+      <div class="pass-top">
+        <div class="pass-qr" id="badgeQr" onclick="openBadgeQr()" role="button" tabindex="0"
+             aria-label="Enlarge badge QR code" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openBadgeQr();}"></div>
+        <div class="pass-head">
+          <div class="pass-kicker">Event Pass</div>
+          <div class="barcode" aria-hidden="true"></div>
+          <div class="pass-num" id="passNum"></div>
+        </div>
+      </div>
+
+      <div class="pass-perf" aria-hidden="true"></div>
+
+      <div class="pass-body">
+        <div class="pass-vert">
+          <span class="pass-tag">ITL</span>
+          <span class="pass-city" aria-hidden="true">GameCon</span>
+        </div>
+        <div class="pass-fields">
+          <svg class="pass-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/>
+          </svg>
+          <dl class="pass-grid">
+            <div><dt>Event</dt><dd>ITL 2027</dd></div>
+            <div><dt>Stamps</dt><dd id="passStamps">0/0</dd></div>
+            <div class="full"><dt>Student ID</dt><dd id="badgeId"></dd></div>
+            <div class="full"><dt>Passenger</dt><dd id="badgeName"></dd></div>
+          </dl>
+          <div class="pass-hint">Show at the entrance gate. Tap the QR to enlarge.</div>
+        </div>
+      </div>
+
+      <div class="pass-foot" aria-hidden="true">
+        <div class="barcode barcode--wide"></div>
+        <div class="pass-num" id="passFootNum"></div>
+      </div>
+    </section>
+
     <div class="card">
+      <h3 class="card-title">Booth stamps</h3>
       <div class="grid" id="stampGrid"></div>
       <p class="progress" id="progressLabel"></p>
       <button class="btn-primary" onclick="exportPassportPNG()">Export passport as PNG</button>
     </div>
 
-    <button class="btn-primary" id="scanBtn" onclick="toggleScanner()">Scan booth QR</button>
+    <div class="scan-actions">
+      <button class="btn-primary" id="scanBtn" onclick="toggleScanner()">Scan booth QR</button>
+    </div>
     <div class="scan-area" id="scanArea">
       <video id="video" playsinline muted></video>
       <div class="scan-frame"></div>
     </div>
-    <div id="scanDebug" style="font-size:11px;font-family:monospace;color:var(--text-muted);text-align:center;margin:-6px 0 12px;"></div>
-    <div class="row" style="margin-bottom:8px;">
+    <div id="scanDebug" aria-live="polite"></div>
+    <div class="row" style="margin-bottom:12px;">
       <button class="btn-ghost" onclick="snapFrame()">Snap this frame</button>
       <button class="btn-ghost" onclick="triggerPhotoCapture()">Use camera app instead</button>
     </div>
     <input type="file" accept="image/*" capture="environment" id="photoInput" style="display:none" onchange="onPhotoSelected(event)">
-    <img id="snapPreview" style="display:none;width:100%;border-radius:8px;margin-bottom:12px;border:1px solid var(--line);" alt="Last captured frame — check this for focus/framing if decoding keeps failing">
+    <img id="snapPreview" alt="Last captured frame — check this for focus/framing if decoding keeps failing">
     <p class="demo-note" id="snapNote" style="display:none;">This is exactly what the scanner tried to read. If it looks blurry or too small here, that's a focus/distance problem, not a bug — back up a little or steady the phone.</p>
 
   </div>
 
-  <div class="modal" id="qrModal" onclick="closeBadgeQr()">
+  <div class="modal" id="qrModal" onclick="closeBadgeQr()" role="dialog" aria-modal="true" aria-label="Badge QR code">
     <div class="qr-modal-card" onclick="event.stopPropagation()">
       <div id="badgeQrLarge"></div>
       <div style="text-align:center;">
-        <div style="font-size:17px;font-weight:600;color:#1F3A5F;" id="badgeNameLarge"></div>
-        <div style="font-size:13px;color:#6b6f6d;" id="badgeIdLarge"></div>
+        <div class="qr-modal-name" id="badgeNameLarge"></div>
+        <div class="qr-modal-id" id="badgeIdLarge"></div>
       </div>
       <p class="qr-modal-hint">Tap anywhere to close</p>
     </div>
@@ -236,7 +285,9 @@ function renderMain(){
   document.getElementById('badgeId').textContent = state.studentId;
   document.getElementById('badgeQr').innerHTML='';
   // Pure black, not navy — see booth.html for why (max contrast for scanning).
-  new QRCode(document.getElementById('badgeQr'), {text:'STUDENT:'+state.studentId, width:64, height:64, colorDark:'#000000', colorLight:'#ffffff'});
+  new QRCode(document.getElementById('badgeQr'), {text:'STUDENT:'+state.studentId, width:96, height:96, colorDark:'#000000', colorLight:'#ffffff'});
+  document.getElementById('passNum').textContent = state.studentId;
+  document.getElementById('passFootNum').textContent = (state.studentId||'').replace(/\D/g,'');
   if(document.getElementById('qrModal').style.display==='flex') renderBadgeQrLarge();
 
   const grid = document.getElementById('stampGrid'); grid.innerHTML='';
@@ -256,6 +307,7 @@ function renderMain(){
     grid.appendChild(el);
   });
   const count = Object.keys(state.stamps).length;
+  document.getElementById('passStamps').textContent = `${count}/${BOOTHS.length}`;
   document.getElementById('progressLabel').textContent = `${count} of ${BOOTHS.length} booths stamped` + (count===BOOTHS.length?' — passport complete!':'');
 
   renderNetStatus(); renderCloudStatus();

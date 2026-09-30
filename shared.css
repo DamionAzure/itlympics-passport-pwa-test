@@ -1,70 +1,302 @@
+/* =====================================================================
+   ITLympics Passport — shared styles
+   Visual language: an airline boarding pass. White ticket stock, black
+   heavy condensed type, red accent bars, dashed perforations, barcodes.
+
+   Token names are kept from the original theme (--ink, --amber, …) because
+   page scripts and inline styles reference them; --amber is now the red
+   accent. Every class name the pages use is still defined here.
+   ===================================================================== */
+
 :root{
-  --ink:#1F3A5F; --ink-light:#3d5c85; --amber:#C9791F; --paper:#EEF1F0; --paper-card:#FFFFFF;
-  --line:#D7DBD8; --danger:#A32D2D; --success:#3B6D11; --text-muted:#6b6f6d;
+  --ink:#111111; --ink-light:#3a3a3a;
+  --amber:#D7263D;            /* accent (red) — name kept for compatibility */
+  --warn:#D98300;             /* offline / pending states */
+  --paper:#E9E9E7; --paper-card:#FFFFFF;
+  --line:#D9D9D6; --danger:#B3261E; --success:#1E7A3C; --text-muted:#666663;
+
+  --radius:14px; --radius-sm:8px;
+  --shadow:0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.06);
+  --font-sans:"Archivo",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  --font-mono:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  --ease:cubic-bezier(.2,.8,.2,1);
+  --dur:.22s;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --ink:#AEC4E2; --ink-light:#8fb0da; --amber:#F2A84C; --paper:#14181A; --paper-card:#1E2326;
-    --line:#333937; --text-muted:#9a9d9b;
+    --ink:#F2F2F0; --ink-light:#C9C9C6; --amber:#FF4D5E; --warn:#F5A524;
+    --paper:#0B0B0B; --paper-card:#181818; --line:#303030; --text-muted:#A3A3A0;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
   }
 }
 :root[data-theme="dark"]{
-  --ink:#AEC4E2; --ink-light:#8fb0da; --amber:#F2A84C; --paper:#14181A; --paper-card:#1E2326;
-  --line:#333937; --text-muted:#9a9d9b;
+  --ink:#F2F2F0; --ink-light:#C9C9C6; --amber:#FF4D5E; --warn:#F5A524;
+  --paper:#0B0B0B; --paper-card:#181818; --line:#303030; --text-muted:#A3A3A0;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
 }
-*{box-sizing:border-box;}
+
+/* ---------- base ---------- */
+*,*::before,*::after{box-sizing:border-box;}
 html,body{margin:0;padding:0;background:var(--paper);}
 body{
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-  color:var(--ink); padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
-  min-height:100%;
+  font-family:var(--font-sans); color:var(--ink); line-height:1.4;
+  min-height:100vh; min-height:100dvh;
+  padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
 }
-.stamp-font{font-family:"Special Elite",monospace;}
-.wrap{max-width:520px;margin:0 auto;padding:20px 18px 60px;}
-header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;}
-h1{font-size:22px;font-weight:500;margin:0;}
-.eyebrow{font-size:12px;color:var(--text-muted);margin:0 0 2px;}
-.pagenav{display:flex;gap:16px;margin-bottom:18px;font-size:12px;overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:thin;}
-.pagenav a{color:var(--text-muted);text-decoration:none;padding-bottom:3px;border-bottom:2px solid transparent;flex-shrink:0;white-space:nowrap;}
-.pagenav a.active{color:var(--ink);border-bottom-color:var(--amber);font-weight:500;}
-.card{background:var(--paper-card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px;}
-label{display:block;font-size:13px;color:var(--text-muted);margin-bottom:6px;}
-input[type=text],input[type=number],select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font-size:16px;margin-bottom:14px;}
-button{font-size:15px;border-radius:8px;border:none;padding:11px 16px;cursor:pointer;font-family:inherit;}
-.btn-primary{background:var(--ink);color:var(--paper-card);width:100%;}
-.btn-primary:disabled{opacity:0.5;cursor:not-allowed;}
-.btn-ghost{background:transparent;border:1px solid var(--line);color:var(--ink);}
-.status-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--paper-card);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px;}
-.dot.on{background:var(--success);} .dot.off{background:var(--danger);}
-.toggle{position:relative;width:42px;height:24px;background:var(--line);border-radius:12px;cursor:pointer;flex-shrink:0;}
-.toggle.on{background:var(--success);}
-.toggle .knob{position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;transition:transform .2s;}
-.toggle.on .knob{transform:translateX(18px);}
-.row{display:flex;gap:8px;}
-.row > *{flex:1;}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper-card);padding:10px 18px;border-radius:20px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none;z-index:50;}
-.toast.show{opacity:1;}
-.toast.warn{background:#8a3b12;}
-.demo-section{margin-top:24px;}
-.demo-section h3{font-size:14px;font-weight:500;margin:0 0 4px;}
+a{color:inherit;}
+code{font-family:var(--font-mono);font-size:.92em;background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:0 4px;}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px;}
+::selection{background:var(--amber);color:#fff;}
 
-/* Section combobox: text input + filtered dropdown, e.g. typing "BSIT"
-   narrows to just that course's sections instead of scrolling one long list. */
+/* ---------- page shell ---------- */
+.wrap{width:100%;max-width:560px;margin:0 auto;padding:20px 18px 72px;}
+.wrap.wrap--wide{max-width:1100px;}
+@media (min-width:600px){ .wrap{padding:32px 24px 80px;} }
+
+/* Header = ticket masthead: black tag eyebrow, heavy title, perforation under it */
+header{
+  display:flex;align-items:flex-end;justify-content:space-between;gap:12px;
+  padding-bottom:14px;margin-bottom:12px;border-bottom:3px dashed var(--ink);
+}
+.eyebrow{
+  display:inline-block;margin:0 0 8px;padding:3px 8px;
+  background:var(--ink);color:var(--paper-card);
+  font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
+}
+h1{margin:0;font-size:clamp(26px,7vw,40px);line-height:.95;}
+/* Class name kept from the old typewriter theme; now the boarding-pass display face. */
+.stamp-font{
+  font-family:var(--font-sans);font-weight:900;font-stretch:80%;
+  text-transform:uppercase;letter-spacing:.02em;
+}
+h2,h3{font-weight:800;text-transform:uppercase;letter-spacing:.08em;}
+.card-title,.card > h3:first-child{margin:0 0 10px;font-size:13px;}
+
+.pagenav{
+  display:flex;gap:18px;margin:0 0 18px;padding:2px 0 0;
+  overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:none;
+  font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+}
+.pagenav::-webkit-scrollbar{display:none;}
+.pagenav a{
+  color:var(--text-muted);text-decoration:none;flex-shrink:0;white-space:nowrap;
+  padding:8px 0 6px;border-bottom:3px solid transparent;
+  transition:color var(--dur) var(--ease),border-color var(--dur) var(--ease);
+}
+.pagenav a:hover{color:var(--ink);}
+.pagenav a.active{color:var(--ink);border-bottom-color:var(--amber);}
+
+/* ---------- cards: ticket stubs with a red edge bar ---------- */
+.card{
+  position:relative;background:var(--paper-card);border:1px solid var(--line);
+  border-radius:var(--radius);padding:20px 20px 20px 26px;margin-bottom:16px;
+  box-shadow:var(--shadow);overflow:hidden;
+}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--amber);}
+
+/* Wide-screen grid used by the Dashboard. .span-2 cards take the full row. */
+.card-grid{display:grid;grid-template-columns:1fr;gap:0 16px;align-items:start;}
+@media (min-width:900px){
+  .card-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .card-grid > .span-2{grid-column:1 / -1;}
+}
+
+/* ---------- form controls ---------- */
+label{display:block;margin-bottom:6px;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);}
+input[type=text],input[type=number],input[type=password],input[type=search],select,textarea{
+  width:100%;padding:11px 12px;margin-bottom:14px;
+  border:1.5px solid var(--line);border-radius:var(--radius-sm);
+  background:var(--paper-card);color:var(--ink);
+  font-family:inherit;font-size:16px;                /* 16px stops iOS zoom-on-focus */
+  transition:border-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease);
+}
+textarea{font-family:var(--font-mono);font-size:13px;resize:vertical;}
+input::placeholder,textarea::placeholder{color:var(--text-muted);opacity:.7;}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--ink);box-shadow:0 0 0 3px color-mix(in srgb,var(--amber) 22%,transparent);}
+input[type=file]{width:100%;margin-bottom:12px;font-size:13px;color:var(--text-muted);}
+input[type=file]::file-selector-button{
+  margin-right:10px;padding:8px 12px;border:1.5px solid var(--ink);border-radius:var(--radius-sm);
+  background:transparent;color:var(--ink);font:inherit;font-weight:700;cursor:pointer;
+}
+
+button{
+  font-family:inherit;font-size:14px;font-weight:700;letter-spacing:.04em;
+  border:none;border-radius:var(--radius-sm);padding:11px 16px;cursor:pointer;
+  transition:background-color var(--dur) var(--ease),color var(--dur) var(--ease),border-color var(--dur) var(--ease),transform .08s ease,opacity var(--dur) var(--ease);
+}
+button:active:not(:disabled){transform:translateY(1px);}
+button:disabled{opacity:.45;cursor:not-allowed;}
+.btn-primary{
+  width:100%;min-height:46px;background:var(--ink);color:var(--paper-card);
+  text-transform:uppercase;letter-spacing:.12em;font-weight:800;
+}
+.btn-primary:hover:not(:disabled){background:var(--amber);color:#fff;}
+.btn-ghost{background:transparent;border:1.5px solid var(--line);color:var(--ink);}
+.btn-ghost:hover:not(:disabled){border-color:var(--ink);}
+
+.row{display:flex;flex-wrap:wrap;gap:8px;}
+.row > *{flex:1 1 120px;min-width:0;}
+
+.err{display:none;margin:-6px 0 12px;font-size:13px;font-weight:600;color:var(--danger);}
+
+/* ---------- status bar: the ticket's "flight status" strip ---------- */
+.status-bar{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  margin-bottom:12px;padding:10px 14px;
+  background:var(--paper-card);border:1px solid var(--line);border-radius:var(--radius-sm);
+  font-size:12px;font-weight:600;letter-spacing:.04em;
+}
+.dot{display:inline-block;width:8px;height:8px;margin-right:8px;border-radius:50%;vertical-align:1px;background:var(--line);}
+.dot.on{background:var(--success);box-shadow:0 0 0 3px color-mix(in srgb,var(--success) 20%,transparent);}
+.dot.off{background:var(--danger);box-shadow:0 0 0 3px color-mix(in srgb,var(--danger) 20%,transparent);}
+
+.toggle{position:relative;flex-shrink:0;width:44px;height:26px;border-radius:13px;background:var(--line);cursor:pointer;transition:background-color var(--dur) var(--ease);}
+.toggle.on{background:var(--success);}
+.toggle .knob{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform var(--dur) var(--ease);}
+.toggle.on .knob{transform:translateX(18px);}
+
+/* ---------- toast ---------- */
+.toast{
+  position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));z-index:150;
+  max-width:calc(100vw - 32px);padding:11px 18px;border-radius:999px;
+  background:var(--ink);color:var(--paper-card);font-size:13px;font-weight:600;text-align:center;
+  opacity:0;transform:translate(-50%,12px);pointer-events:none;
+  transition:opacity var(--dur) var(--ease),transform var(--dur) var(--ease);
+}
+.toast.show{opacity:1;transform:translate(-50%,0);}
+.toast.warn{background:var(--amber);color:#fff;}
+
+/* ---------- Testing-page tool sections ---------- */
+.demo-section{margin-top:28px;padding-top:18px;border-top:2px dashed var(--line);}
+.demo-section h3{margin:0 0 6px;font-size:13px;}
+.demo-note{margin:0 0 14px;font-size:12px;line-height:1.55;color:var(--text-muted);}
+.demo-booths{display:flex;flex-wrap:wrap;gap:8px;}
+.demo-booth-btn{
+  padding:8px 12px;font-size:12px;
+  background:var(--paper-card);border:1.5px solid var(--line);color:var(--ink);
+}
+.demo-booth-btn:hover:not(:disabled){border-color:var(--ink);}
+.mono-box{
+  max-height:220px;overflow-y:auto;margin-bottom:8px;padding:8px 10px;
+  background:var(--paper-card);border:1px solid var(--line);border-radius:var(--radius-sm);
+  font-family:var(--font-mono);font-size:11px;color:var(--text-muted);
+}
+.mono-raw{margin-bottom:8px;font-family:var(--font-mono);font-size:11px;color:var(--text-muted);word-break:break-all;}
+.log-row{padding:4px 0;border-bottom:1px solid var(--line);}
+.log-row:last-child{border-bottom:none;}
+
+/* ---------- section combobox ---------- */
 .combobox{position:relative;margin-bottom:14px;}
 .combobox input{margin-bottom:0;}
-.combobox-list{position:absolute;left:0;right:0;top:calc(100% + 4px);max-height:220px;overflow-y:auto;
-  background:var(--paper-card);border:1px solid var(--line);border-radius:8px;z-index:20;
-  box-shadow:0 6px 18px rgba(0,0,0,.12);display:none;}
-.combobox-list.open{display:block;}
-.combobox-opt{padding:9px 12px;font-size:14px;cursor:pointer;}
-.combobox-opt:hover, .combobox-opt.active{background:var(--paper);}
-.combobox-empty{padding:9px 12px;font-size:13px;color:var(--text-muted);}
-.demo-note{font-size:12px;color:var(--text-muted);line-height:1.5;margin-bottom:14px;}
-.demo-booths{display:flex;flex-wrap:wrap;gap:8px;}
-.demo-booth-btn{background:var(--paper);border:1px solid var(--line);font-size:12px;padding:8px 10px;color:var(--ink);}
-.demo-booth-btn:disabled{opacity:0.4;cursor:not-allowed;}
-.err{color:var(--danger);font-size:13px;margin-top:-8px;margin-bottom:12px;display:none;}
-.modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;z-index:100;padding:20px;}
-.modal-card{background:var(--paper-card);border-radius:12px;padding:20px;max-width:400px;width:100%;max-height:85vh;overflow-y:auto;}
-.log-row{padding:3px 0;border-bottom:1px solid var(--line);}
+.combobox-list{
+  position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;max-height:240px;overflow-y:auto;
+  background:var(--paper-card);border:1.5px solid var(--ink);border-radius:var(--radius-sm);
+  box-shadow:0 10px 28px rgba(0,0,0,.14);
+  display:none;
+}
+.combobox-list.open{display:block;animation:pop-in var(--dur) var(--ease);}
+.combobox-opt{padding:10px 12px;font-size:14px;cursor:pointer;}
+.combobox-opt:hover,.combobox-opt.active{background:var(--paper);}
+.combobox-empty{padding:10px 12px;font-size:13px;color:var(--text-muted);}
+
+/* ---------- modals ----------
+   Pages open/close modals by setting style.display to "flex" / "none", so
+   the transitions hang off that instead of needing any script changes:
+   - opening: a keyframe animation runs whenever the element becomes displayed
+     (works in every browser);
+   - closing: `display` transitions discretely (transition-behavior:
+     allow-discrete), so the fade-out plays before it disappears. Browsers
+     without that support just close instantly.
+   On narrow screens the card becomes a bottom sheet. */
+.modal{
+  display:none;position:fixed;inset:0;z-index:100;
+  align-items:center;justify-content:center;padding:20px;
+  background:rgba(10,10,10,.6);
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);
+  opacity:1;
+  transition:opacity var(--dur) var(--ease),display var(--dur) allow-discrete;
+  animation:modal-fade var(--dur) var(--ease);
+}
+.modal[style*="display: none"]{opacity:0;}
+.modal-card,.qr-modal-card{
+  transition:transform var(--dur) var(--ease),opacity var(--dur) var(--ease);
+  animation:modal-rise .28s var(--ease);
+}
+.modal[style*="display: none"] .modal-card,
+.modal[style*="display: none"] .qr-modal-card{transform:translateY(16px) scale(.98);opacity:0;}
+.modal-card{
+  position:relative;width:100%;max-width:420px;max-height:85vh;max-height:85dvh;overflow-y:auto;
+  padding:22px 22px 22px 28px;border-radius:var(--radius);
+  background:var(--paper-card);box-shadow:0 20px 60px rgba(0,0,0,.35);
+}
+.modal-card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--amber);}
+@media (max-width:519px){
+  .modal{align-items:flex-end;padding:0;}
+  .modal-card{max-width:none;border-radius:var(--radius) var(--radius) 0 0;padding-bottom:calc(22px + env(safe-area-inset-bottom,0px));}
+  .modal-card{animation-name:sheet-up;}
+  .modal[style*="display: none"] .modal-card{transform:translateY(100%);}
+}
+@keyframes modal-fade{from{opacity:0;}to{opacity:1;}}
+@keyframes modal-rise{from{opacity:0;transform:translateY(16px) scale(.98);}to{opacity:1;transform:none;}}
+@keyframes sheet-up{from{transform:translateY(100%);}to{transform:none;}}
+@keyframes pop-in{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
+
+/* ---------- boarding-pass building blocks (Passport page) ----------
+   The pass is always printed on white stock, even in dark mode — it's the
+   "physical" ticket. Barcodes are decorative (aria-hidden); the QR code is
+   the only thing on it meant to be scanned. */
+.pass{
+  --pass-ink:#111; --pass-red:#D7263D; --pass-paper:#fff;
+  position:relative;margin-bottom:16px;border-radius:18px;overflow:hidden;
+  background:var(--pass-paper);color:var(--pass-ink);
+  box-shadow:0 2px 4px rgba(0,0,0,.08),0 18px 40px rgba(0,0,0,.14);
+}
+.pass-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 20px 16px;}
+.pass-qr{flex-shrink:0;line-height:0;padding:6px;background:#fff;border:2px solid var(--pass-ink);border-radius:6px;cursor:pointer;transition:transform var(--dur) var(--ease);}
+.pass-qr:hover{transform:scale(1.03);}
+.pass-qr:focus-visible{outline:3px solid var(--pass-red);outline-offset:3px;}
+.pass-head{display:flex;flex-direction:column;align-items:flex-end;gap:6px;min-width:0;text-align:right;}
+.pass-kicker{font-size:12px;font-weight:900;letter-spacing:.18em;text-transform:uppercase;}
+.pass-num{font-family:var(--font-mono);font-size:15px;letter-spacing:.08em;}
+
+/* dashed perforation with half-circle notches cut into both edges */
+.pass-perf{position:relative;height:0;margin:0 18px;border-top:3px dashed var(--pass-ink);}
+.pass-perf::before,.pass-perf::after{
+  content:"";position:absolute;top:-13px;width:24px;height:24px;border-radius:50%;background:var(--paper);
+}
+.pass-perf::before{left:-32px;} .pass-perf::after{right:-32px;}
+
+.pass-body{
+  display:grid;grid-template-columns:auto 1fr;gap:12px;
+  margin:18px 0;padding:6px 26px;
+  box-shadow:inset 10px 0 0 var(--pass-red),inset -10px 0 0 var(--pass-red);
+}
+.pass-vert{display:flex;flex-direction:column;align-items:flex-start;gap:10px;}
+.pass-tag{padding:2px 8px;background:var(--pass-ink);color:#fff;font-size:18px;font-weight:900;letter-spacing:.12em;}
+.pass-city{
+  writing-mode:vertical-rl;transform:rotate(180deg);
+  font-size:clamp(52px,15vw,76px);font-weight:900;font-stretch:85%;line-height:.85;letter-spacing:.06em;text-transform:uppercase;
+}
+.pass-fields{display:flex;flex-direction:column;align-items:flex-end;justify-content:space-between;gap:16px;min-width:0;}
+.pass-icon{width:56px;height:56px;}
+.pass-grid{display:grid;grid-template-columns:repeat(2,auto);gap:14px 22px;margin:0;justify-content:end;text-align:right;}
+.pass-grid dt{font-size:11px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;}
+.pass-grid dd{margin:2px 0 0;font-family:var(--font-mono);font-size:13px;letter-spacing:.06em;text-transform:uppercase;overflow-wrap:anywhere;}
+.pass-grid .full{grid-column:1 / -1;}
+.pass-hint{font-size:11px;color:#666;text-align:right;max-width:22ch;}
+.pass-foot{display:flex;flex-direction:column;align-items:center;gap:4px;padding:0 20px 18px;}
+
+.barcode{
+  width:150px;height:56px;
+  background:repeating-linear-gradient(90deg,
+    currentColor 0 3px,transparent 3px 5px,currentColor 5px 6px,transparent 6px 9px,
+    currentColor 9px 13px,transparent 13px 14px,currentColor 14px 15px,transparent 15px 19px,
+    currentColor 19px 21px,transparent 21px 23px);
+}
+.barcode--wide{width:min(100%,320px);height:52px;}
+
+/* ---------- accessibility: honour reduced motion ---------- */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation-duration:.001ms !important;animation-iteration-count:1 !important;transition-duration:.001ms !important;}
+}

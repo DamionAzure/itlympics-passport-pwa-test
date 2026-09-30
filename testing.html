@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1F3A5F">
+<meta name="theme-color" content="#111111">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>ITLympics Testing Suite</title>
-<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="shared.css">
 <script src="vendor/supabase.js"></script>
 </head>
@@ -76,7 +76,7 @@
   <div class="demo-section" id="replayBox" style="display:none;">
     <h3>Replay test</h3>
     <p class="demo-note">Reuse the last code you scanned — proves a screenshotted code goes stale once its time window passes.</p>
-    <div style="font-size:11px;font-family:monospace;word-break:break-all;color:var(--text-muted);margin-bottom:8px;" id="replayRaw"></div>
+    <div class="mono-raw" id="replayRaw"></div>
     <button class="btn-ghost" onclick="replayLastCode()">Replay last code now</button>
   </div>
 
@@ -124,7 +124,7 @@
     <h3>Live skills registrations</h3>
     <p class="demo-note">Updates in real time via Supabase Realtime as people register on any device — no polling, no Pusher needed. Needs Replication enabled on <code>skills_registrations</code> in the Supabase dashboard.</p>
     <div id="liveCounts" style="font-size:12px;color:var(--text-muted);margin-bottom:8px;"></div>
-    <div id="liveFeed" style="max-height:220px;overflow-y:auto;font-family:monospace;font-size:11px;color:var(--text-muted);background:var(--paper-card);border:1px solid var(--line);border-radius:8px;padding:8px;"></div>
+    <div id="liveFeed" class="mono-box"></div>
   </div>
 
 
@@ -154,14 +154,14 @@
   <div class="demo-section">
     <h3>Flagged attempts</h3>
     <p class="demo-note">Expired or forged codes and duplicate check-ins — seeded from local storage so it's here even offline, then merged with every device's flags from the <code>flagged_scans</code> table (updates live via Realtime, needs Replication enabled). Each row shows when <em>this device saw it</em> (Scanned) and when the cloud confirmed the write (Received) — a row still saying "Received —" hasn't synced yet.</p>
-    <div id="flagList" style="max-height:220px;overflow-y:auto;font-family:monospace;font-size:11px;color:var(--text-muted);background:var(--paper-card);border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;"></div>
+    <div id="flagList" class="mono-box"></div>
     <button class="btn-ghost" onclick="renderFlags(); log('Flagged attempts refreshed')">Refresh</button>
     <button class="btn-ghost" onclick="clearFlags(); renderFlags(); log('Flagged attempts cleared (local cache only — cloud copy stays)')">Clear</button>
   </div>
 
   <div class="demo-section">
     <h3>Event log</h3>
-    <div id="eventLog" style="max-height:220px;overflow-y:auto;font-family:monospace;font-size:11px;color:var(--text-muted);background:var(--paper-card);border:1px solid var(--line);border-radius:8px;padding:8px;"></div>
+    <div id="eventLog" class="mono-box"></div>
   </div>
   </div>
 

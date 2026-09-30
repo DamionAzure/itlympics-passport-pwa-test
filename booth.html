@@ -3,18 +3,26 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1F3A5F">
+<meta name="theme-color" content="#111111">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>ITLympics Booth Display</title>
-<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="shared.css">
 <!-- Vendored locally (./vendor/) — see index.html for why. -->
 <script src="vendor/qrcode.min.js"></script>
 <script src="vendor/supabase.js"></script>
+<style>
+  .booth-name{font-size:clamp(24px,7vw,36px);font-weight:900;font-stretch:80%;line-height:1;text-transform:uppercase;overflow-wrap:anywhere;}
+  .booth-body{display:flex;flex-direction:column;align-items:center;gap:10px;margin:18px 0;padding:6px 30px;box-shadow:inset 10px 0 0 var(--pass-red),inset -10px 0 0 var(--pass-red);}
+  #genQr{display:flex;justify-content:center;padding:12px;background:#fff;border:3px solid #111;border-radius:10px;}
+  #genQr img,#genQr canvas{max-width:100%;height:auto;}
+  #genCountdown{font-size:13px;font-weight:900;letter-spacing:.14em;text-transform:uppercase;color:var(--pass-red);}
+  #genRaw{font-family:var(--font-mono);font-size:11px;color:#666;word-break:break-all;text-align:center;}
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -50,12 +58,21 @@
     <p class="demo-note" style="margin-bottom:0;">This interval applies venue-wide — the Passport app reads the same setting when it validates a scan.</p>
   </div>
 
-  <div class="card" style="text-align:center;">
-    <div id="boothName" class="stamp-font" style="font-size:20px;margin-bottom:16px;"></div>
-    <div id="genQr" style="display:flex;justify-content:center;margin-bottom:14px;background:#fff;padding:12px;border-radius:8px;"></div>
-    <div style="font-size:11px;font-family:monospace;word-break:break-all;color:var(--text-muted);" id="genRaw"></div>
-    <div style="font-size:13px;color:var(--amber);margin-top:8px;" id="genCountdown"></div>
-  </div>
+  <section class="pass booth-pass" aria-label="Rotating booth code">
+    <div class="pass-top">
+      <div>
+        <div class="pass-kicker">Booth</div>
+        <div id="boothName" class="booth-name"></div>
+      </div>
+      <div class="barcode" aria-hidden="true"></div>
+    </div>
+    <div class="pass-perf" aria-hidden="true"></div>
+    <div class="booth-body">
+      <div id="genQr"></div>
+      <div id="genCountdown" aria-live="polite"></div>
+      <div id="genRaw"></div>
+    </div>
+  </section>
 
   <p class="demo-note">Attendees scan this with their Passport app's camera to get stamped. The code rotates automatically. While this device has a connection, each code is generated and verified server-side against the booth secret; if venue wifi drops, it falls back to computing codes locally from the seed it cached the last time it was online (it needs to have been logged in and online once so the seed is cached). Only staff and admins can open this page.</p>
   </div>

@@ -3,28 +3,37 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1F3A5F">
+<meta name="theme-color" content="#111111">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>ITLympics Game Con Voting</title>
-<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="shared.css">
 <script src="vendor/supabase.js"></script>
 <style>
-  .cat-tabs{display:flex;gap:8px;overflow-x:auto;margin-bottom:16px;padding-bottom:2px;}
-  .cat-tab{flex-shrink:0;font-size:12px;padding:8px 12px;border:1px solid var(--line);border-radius:20px;background:var(--paper-card);cursor:pointer;color:var(--text-muted);white-space:nowrap;}
-  .cat-tab.active{border-color:var(--amber);color:var(--ink);font-weight:500;}
-  .cat-tab .check{color:var(--success);margin-right:4px;}
-  .candidate{border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;}
-  .candidate.selected{border-color:var(--amber);background:color-mix(in srgb, var(--amber) 10%, transparent);}
+  .cat-tabs{display:flex;gap:8px;margin:0 -18px 16px;padding:2px 18px 4px;overflow-x:auto;scrollbar-width:none;scroll-snap-type:x proximity;}
+  .cat-tabs::-webkit-scrollbar{display:none;}
+  .cat-tab{flex-shrink:0;scroll-snap-align:start;padding:9px 14px;border:1.5px solid var(--line);border-radius:999px;background:var(--paper-card);color:var(--text-muted);font-size:12px;font-weight:700;white-space:nowrap;cursor:pointer;transition:border-color var(--dur) var(--ease),color var(--dur) var(--ease),background-color var(--dur) var(--ease);}
+  .cat-tab:hover{border-color:var(--ink);color:var(--ink);}
+  .cat-tab.active{border-color:var(--ink);background:var(--ink);color:var(--paper-card);}
+  .cat-tab .check{margin-right:5px;color:var(--success);}
+  .cat-tab.active .check{color:inherit;}
+  .candidate{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding:14px 16px;border:1.5px solid var(--line);border-radius:var(--radius-sm);font-weight:600;cursor:pointer;transition:border-color var(--dur) var(--ease),background-color var(--dur) var(--ease),transform .08s ease;}
+  .candidate:hover:not(.voted){border-color:var(--ink);}
+  .candidate:active:not(.voted){transform:translateY(1px);}
+  .candidate.selected{border-color:var(--amber);background:color-mix(in srgb,var(--amber) 8%,transparent);}
+  .candidate.selected::after{content:"✓";color:var(--amber);font-weight:900;}
   .candidate.voted{cursor:default;}
+  #catNote{margin-top:0;font-size:12px;color:var(--text-muted);}
   .bar-row{margin-bottom:12px;}
-  .bar-label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;}
-  .bar-track{background:var(--paper);border:1px solid var(--line);border-radius:6px;height:14px;overflow:hidden;}
-  .bar-fill{background:var(--amber);height:100%;transition:width .3s;}
+  .bar-label{display:flex;justify-content:space-between;gap:10px;margin-bottom:4px;font-size:13px;}
+  .bar-label span:last-child{flex-shrink:0;font-family:var(--font-mono);font-size:12px;color:var(--text-muted);}
+  .bar-track{height:12px;overflow:hidden;border-radius:999px;background:var(--paper);}
+  .bar-fill{height:100%;background:var(--amber);transition:width .4s var(--ease);}
+  @media (min-width:600px){ .cat-tabs{margin:0 0 16px;padding:2px 0 4px;} }
 </style>
 </head>
 <body>
@@ -69,7 +78,7 @@
     <div class="cat-tabs" id="catTabs"></div>
 
     <div class="card">
-      <p style="font-size:13px;color:var(--text-muted);margin-top:0;" id="catNote">One vote per student ID per category — checked against the cloud, not just this device.</p>
+      <p id="catNote">One vote per student ID per category — checked against the cloud, not just this device.</p>
       <div id="candidateList"></div>
       <button class="btn-primary" id="voteBtn" onclick="castVote()" disabled>Cast vote</button>
       <p class="err" id="voteErr" style="display:none;"></p>
@@ -77,7 +86,7 @@
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0;font-size:14px;">Live results <span id="totalVotes" style="color:var(--text-muted);font-weight:400;"></span></h3>
+      <h3 class="card-title">Live results <span id="totalVotes" style="color:var(--text-muted);font-weight:400;"></span></h3>
       <div id="results"></div>
     </div>
     </div>

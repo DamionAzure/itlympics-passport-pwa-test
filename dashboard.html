@@ -3,34 +3,39 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#1F3A5F">
+<meta name="theme-color" content="#111111">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>ITLympics Dashboard</title>
-<link href="https://fonts.googleapis.com/css2?family=Special+Elite&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="shared.css">
 <script src="vendor/supabase.js"></script>
 <style>
-  .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;}
-  .stat-card{border:1px solid var(--line);border-radius:10px;padding:12px 8px;text-align:center;background:var(--paper-card);}
-  .stat-num{font-size:24px;font-weight:600;}
-  .stat-label{font-size:11px;color:var(--text-muted);margin-top:2px;}
+  .stat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+  @media (min-width:520px){ .stat-grid{grid-template-columns:repeat(3,minmax(0,1fr));} }
+  @media (min-width:900px){ .stat-grid{grid-template-columns:repeat(6,minmax(0,1fr));} }
+  .stat-card{padding:12px 10px;border:1.5px solid var(--ink);border-radius:var(--radius-sm);background:var(--paper-card);}
+  .stat-num{font-family:var(--font-mono);font-size:26px;font-weight:700;line-height:1.1;}
+  .stat-label{margin-top:4px;font-size:10px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);}
   .bar-row{margin-bottom:10px;}
-  .bar-label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;}
-  .bar-track{background:var(--paper);border:1px solid var(--line);border-radius:6px;height:12px;overflow:hidden;}
-  .bar-fill{background:var(--amber);height:100%;transition:width .3s;}
-  .cat-heading{font-size:12px;font-weight:500;color:var(--text-muted);margin:14px 0 6px;text-transform:uppercase;letter-spacing:.03em;}
+  .bar-label{display:flex;justify-content:space-between;gap:10px;margin-bottom:4px;font-size:13px;}
+  .bar-label span:last-child{flex-shrink:0;font-family:var(--font-mono);font-size:12px;color:var(--text-muted);}
+  .bar-track{height:10px;overflow:hidden;border-radius:999px;background:var(--paper);}
+  .bar-fill{height:100%;background:var(--amber);transition:width .4s var(--ease);}
+  .cat-heading{margin:16px 0 8px;font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:var(--text-muted);}
   .cat-heading:first-child{margin-top:0;}
-  .review-row{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:12px;padding:8px 0;border-bottom:1px solid var(--line);}
+  .review-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px;}
   .review-row:last-child{border-bottom:none;}
   .review-meta{color:var(--text-muted);}
+  .scroll-list{max-height:360px;overflow-y:auto;}
+  #lastUpdated{margin-top:10px;font-family:var(--font-mono);font-size:11px;color:var(--text-muted);}
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="wrap wrap--wide">
 
   <header>
     <div>
@@ -60,8 +65,10 @@
   </div>
 
   <div id="mainView" style="display:none;">
+  <div class="card-grid">
 
-    <div class="card">
+    <div class="card span-2">
+      <h3 class="card-title">Today at a glance</h3>
       <div class="stat-grid">
         <div class="stat-card"><div class="stat-num" id="statStudents">–</div><div class="stat-label">Passport registrations</div></div>
         <div class="stat-card"><div class="stat-num" id="statSkills">–</div><div class="stat-label">Skills registrations</div></div>
@@ -70,56 +77,61 @@
         <div class="stat-card"><div class="stat-num" id="statUnverified">–</div><div class="stat-label">Unverified (offline scans)</div></div>
         <div class="stat-card"><div class="stat-num" id="statVotes">–</div><div class="stat-label">Total votes cast</div></div>
       </div>
-      <div style="font-size:11px;color:var(--text-muted);margin-top:10px;" id="lastUpdated"></div>
+      <div id="lastUpdated"></div>
     </div>
 
+    <!-- Attendance -->
     <div class="card">
-      <h3 style="margin-top:0;font-size:14px;">Registrations by course</h3>
-      <p class="demo-note" style="margin-bottom:8px;">Grouped from each attendee's section on Skills Registration.</p>
+      <h3 class="card-title">Registrations by course</h3>
+      <p class="demo-note">Grouped from each attendee's section on Skills Registration.</p>
       <div id="courseBreakdown"></div>
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0;font-size:14px;">Booth stamps progress</h3>
-      <p class="demo-note" style="margin-bottom:8px;">Share of registered attendees who've been stamped at each booth.</p>
+      <h3 class="card-title">Booth stamps progress</h3>
+      <p class="demo-note">Share of registered attendees who've been stamped at each booth.</p>
       <div id="boothBreakdown"></div>
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0;font-size:14px;">Unverified stamps — offline scans</h3>
-      <p class="demo-note" style="margin-bottom:8px;">Accepted on trust because the attendee's phone was offline at the moment of scanning, so the code's signature was never checked against the booth secret (see index.html). Almost always legitimate — venue wifi drops happen — but worth a glance if a booth reports something odd, since this is the one path that skips signature verification entirely. Mark a row verified once you're satisfied it's fine; that just clears it from this list.</p>
-      <div id="unverifiedList"></div>
-    </div>
-
-    <div class="card admin-only" id="roleMgmtCard" style="display:none;">
-      <h3 style="margin-top:0;font-size:14px;">Role Management</h3>
-      <p class="demo-note">Everyone starts as <strong>user</strong>. Promote to <strong>staff</strong> (booths, entrance, dashboard, testing) or <strong>admin</strong> (everything, including wiping data). They need to have logged in once already. Only admins can do this — enforced by the database, not just this panel.</p>
-      <input type="text" id="roleSearchInput" placeholder="Search by name, Student ID, or role…" oninput="renderRoleSearch()">
-      <div id="roleSearchCount" style="font-size:11px;color:var(--text-muted);margin:-8px 0 8px;"></div>
-      <div id="roleSearchResults" style="max-height:360px;overflow-y:auto;"></div>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0;font-size:14px;">Roster coverage</h3>
-      <p class="demo-note" style="margin-bottom:8px;">How much of the imported student roster has shown up. "Accounts not on roster" are logins whose Student ID isn't on the roster (typos, guests, or a roster that's out of date).</p>
+      <h3 class="card-title">Roster coverage</h3>
+      <p class="demo-note">How much of the imported student roster has shown up. "Accounts not on roster" are logins whose Student ID isn't on the roster (typos, guests, or a roster that's out of date).</p>
       <div id="rosterCoverage"></div>
     </div>
 
+    <div class="card">
+      <h3 class="card-title">Voting leaderboards</h3>
+      <div id="voteBreakdown" class="scroll-list"></div>
+    </div>
+
+    <!-- Review -->
+    <div class="card span-2">
+      <h3 class="card-title">Unverified stamps — offline scans</h3>
+      <p class="demo-note">Accepted on trust because the attendee's phone was offline at the moment of scanning, so the code's signature was never checked against the booth secret. Almost always legitimate (venue wifi drops happen), but worth a glance if a booth reports something odd. Mark a row verified once you're satisfied; that just clears it from this list.</p>
+      <div id="unverifiedList" class="scroll-list"></div>
+    </div>
+
+    <!-- Admin tools -->
     <div class="card admin-only" id="rosterCard" style="display:none;">
-      <h3 style="margin-top:0;font-size:14px;">Roster import (CSV)</h3>
+      <h3 class="card-title">Roster import (CSV)</h3>
       <p class="demo-note">Columns: <code>student_id, name, section</code>. A header row is optional, and columns can be in any order if you include one. Existing Student IDs are updated, new ones added, and nothing is deleted. Rows that fail the same ID/name checks as registration are skipped and listed below.</p>
-      <input type="file" id="rosterFile" accept=".csv,text/csv" onchange="onRosterFile(this)" style="margin-bottom:10px;font-size:13px;">
+      <label for="rosterFile">Upload a file</label>
+      <input type="file" id="rosterFile" accept=".csv,text/csv" onchange="onRosterFile(this)">
       <label for="rosterText">…or paste CSV</label>
-      <textarea id="rosterText" rows="5" placeholder="student_id,name,section&#10;23-0123,Juan Dela Cruz,BSIT 2-1" oninput="previewRoster()" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--paper);color:var(--ink);font-family:monospace;font-size:12px;margin-bottom:10px;"></textarea>
-      <div id="rosterPreview" style="font-size:12px;margin-bottom:10px;"></div>
+      <textarea id="rosterText" rows="5" placeholder="student_id,name,section&#10;23-0123,Juan Dela Cruz,BSIT 2-1" oninput="previewRoster()"></textarea>
+      <div id="rosterPreview" style="font-size:12px;margin-bottom:10px;" aria-live="polite"></div>
       <button class="btn-primary" id="rosterImportBtn" onclick="doRosterImport()" disabled>Import</button>
     </div>
 
-    <div class="card">
-      <h3 style="margin-top:0;font-size:14px;">Voting leaderboards</h3>
-      <div id="voteBreakdown"></div>
+    <div class="card admin-only" id="roleMgmtCard" style="display:none;">
+      <h3 class="card-title">Role management</h3>
+      <p class="demo-note">Everyone starts as <strong>user</strong>. Promote to <strong>staff</strong> (booths, entrance, dashboard, testing) or <strong>admin</strong> (everything, including wiping data). They need to have logged in once already. Only admins can do this, and the database enforces it.</p>
+      <input type="search" id="roleSearchInput" placeholder="Search by name, Student ID, or role…" oninput="renderRoleSearch()" aria-label="Search accounts">
+      <div id="roleSearchCount" style="font-size:11px;color:var(--text-muted);margin:-8px 0 8px;"></div>
+      <div id="roleSearchResults" class="scroll-list"></div>
     </div>
 
+  </div>
   </div>
 
 </div>
