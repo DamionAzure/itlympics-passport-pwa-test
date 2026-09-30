@@ -31,7 +31,6 @@
   .stamp-slot .name{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-muted);}
   .stamp-slot.filled .name{color:var(--ink);}
   .stamp-mark{margin-top:2px;padding:2px 6px;border:2.5px solid var(--amber);border-radius:4px;color:var(--amber);font-size:12px;font-weight:900;letter-spacing:.06em;max-width:100%;transform:rotate(-8deg);animation:stamp-in .35s var(--ease);}
-  .stamp-meta{font-family:var(--font-mono);font-size:9px;line-height:1.4;color:var(--text-muted);}
   .pending-ribbon,.not-sure-ribbon{position:absolute;top:10px;left:-30px;width:110px;padding:2px 0;transform:rotate(-45deg);color:#fff;font-size:9px;font-weight:800;letter-spacing:.08em;text-align:center;text-transform:uppercase;box-shadow:0 1px 3px rgba(0,0,0,.3);}
   .pending-ribbon{background:var(--warn);}
   .not-sure-ribbon{background:var(--danger);}
@@ -304,7 +303,6 @@ function renderMain(){
     let inner = `<div class="name">${b.name}</div>`;
     if(filled){
       inner += '<div class="stamp-mark">STAMPED</div>';
-      inner += `<div class="stamp-meta">Scanned ${new Date(stamp.scannedAt).toLocaleTimeString()}<br>${stamp.receivedAt ? 'Received '+new Date(stamp.receivedAt).toLocaleTimeString() : (sb ? 'Received —' : '')}</div>`;
       if(stamp.notSure) inner += '<div class="not-sure-ribbon">Not Sure</div>';
       else if(stamp.pendingVerify) inner += '<div class="pending-ribbon">Offline</div>';
     }
