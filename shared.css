@@ -293,6 +293,23 @@ input + .err,.combobox + .err{margin-top:-6px;}
 }
 .barcode--wide{width:min(100%,320px);height:52px;}
 
+/* ---------- ticket stub ("the back of the ticket") ----------
+   A second .pass-class card used for anything that's a record/counterfoil
+   of the main pass (currently: the booth stamp grid on the Passport page).
+   Reuses .pass's white-ticket/red-bar/perforation language so it reads as
+   the next torn-off section of the same ticket rather than an unrelated
+   card. Forces the light-ticket palette on its contents (same reasoning as
+   .pass: the ticket is "physical" and always printed on white stock, even
+   when the site itself is in dark mode) so the dashed stamp slots, muted
+   labels etc. defined elsewhere stay legible regardless of site theme. */
+.pass-stub{
+  --ink:#111111; --amber:#D7263D; --warn:#D98300; --danger:#B3261E;
+  --paper-card:#ffffff; --line:#dddddd; --text-muted:#666666;
+}
+.pass-stub-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 20px 14px;}
+.pass-stub-body{margin:14px 0;padding:6px 26px;box-shadow:inset 10px 0 0 var(--pass-red),inset -10px 0 0 var(--pass-red);}
+.pass-stub-foot{padding:0 26px 20px;}
+
 /* =====================================================================
    RESPONSIVE LAYOUT
    Mobile (default, < 640px): single column, nav scrolls sideways.

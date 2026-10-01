@@ -134,12 +134,23 @@
 
     <div class="desk-main">
 
-    <div class="card">
-      <h3 class="card-title">Booth stamps</h3>
-      <div class="grid" id="stampGrid"></div>
-      <p class="progress" id="progressLabel"></p>
-      <button class="btn-primary" onclick="exportPassportPNG()">Export passport as PNG</button>
-    </div>
+    <!-- Ticket stub: the "back half" of the boarding pass above — same
+         white-stock/red-bar/perforation language, continuing the pass
+         rather than looking like an unrelated settings card. -->
+    <section class="pass pass-stub" aria-label="Booth stamps">
+      <div class="pass-stub-top">
+        <div class="pass-kicker">Stub · Booth Stamps</div>
+        <div class="barcode" aria-hidden="true"></div>
+      </div>
+      <div class="pass-perf" aria-hidden="true"></div>
+      <div class="pass-stub-body">
+        <div class="grid" id="stampGrid"></div>
+        <p class="progress" id="progressLabel"></p>
+      </div>
+      <div class="pass-stub-foot">
+        <button class="btn-primary" onclick="exportPassportPNG()">Export passport as PNG</button>
+      </div>
+    </section>
 
     <div class="scan-actions">
       <button class="btn-primary" id="scanBtn" onclick="toggleScanner()">Scan booth QR</button>
@@ -344,8 +355,11 @@ function toggleNet(){
   if(state.online) maybeSync(); else showToast('Venue wifi off — stamps keep working locally');
 }
 
+// Wraps text to maxWidth at the ctx's current font/alignment and draws it.
+// Returns the number of lines drawn, so callers can reserve the right
+// amount of vertical space instead of guessing (that gap is what let the
+// Passenger name overlap the row below it before).
 function wrapText(ctx, text, x, y, maxWidth, lineHeight){
-  ctx.textAlign='center';
   const words = text.split(' ');
   let line='', lines=[];
   words.forEach(w=>{
@@ -355,48 +369,196 @@ function wrapText(ctx, text, x, y, maxWidth, lineHeight){
   });
   lines.push(line);
   lines.forEach((l,i)=>ctx.fillText(l.trim(), x, y+i*lineHeight));
+  return lines.length;
+}
+// Same wrapping math as wrapText but without drawing — used to measure how
+// tall a field will be (e.g. a long name) before laying out the rows above it.
+function countWrapLines(ctx, text, maxWidth, font){
+  ctx.font = font;
+  const words = text.split(' ');
+  let line='', lines=0;
+  words.forEach(w=>{
+    const test = line+w+' ';
+    if(ctx.measureText(test).width > maxWidth && line){ lines++; line = w+' '; }
+    else line = test;
+  });
+  return lines+1;
 }
 
-function exportPassportPNG(){
-  const cols=3, rows=Math.ceil(BOOTHS.length/cols), cellW=170, cellH=140, pad=30, headerH=100;
-  const canvas = document.createElement('canvas');
-  canvas.width = pad*2 + cols*cellW;
-  canvas.height = headerH + pad + rows*cellH + 30;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#EEF1F0'; ctx.fillRect(0,0,canvas.width,canvas.height);
-  ctx.textAlign='left';
-  ctx.fillStyle = '#1F3A5F'; ctx.font = '700 22px sans-serif';
-  ctx.fillText('ITLympics event passport', pad, 40);
-  ctx.font = '14px sans-serif'; ctx.fillStyle = '#3d5c85';
-  ctx.fillText(`${state.name}  ·  ${state.studentId}`, pad, 64);
-  const count = Object.keys(state.stamps).length;
-  ctx.fillText(`${count} of ${BOOTHS.length} booths stamped`, pad, 84);
+// ---- barcode (decorative, same look as the CSS .barcode) ----
+// Deterministic from a seed string so the same ID always draws the same
+// pattern, rather than looking random/different every export.
+function drawBarcode(ctx, x, y, w, h, seed){
+  let s = 0; for(let i=0;i<seed.length;i++) s = (s*31 + seed.charCodeAt(i)) >>> 0;
+  const rand = () => { s = (s*1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  ctx.save(); ctx.fillStyle = '#111';
+  let cx = x;
+  while(cx < x+w){
+    const bw = 2 + Math.floor(rand()*5);
+    if(rand() > 0.42) ctx.fillRect(cx, y, bw, h);
+    cx += bw + 1;
+  }
+  ctx.restore();
+}
+// Rounded-rect helper (roundRect isn't on every supported canvas yet).
+function rr(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
 
+// Renders the Passport as one two-part paper ticket — a boarding-pass-style
+// badge on top (QR, Student ID, passenger) and a perforated stub below
+// listing every booth stamp — matching the on-screen .pass / .pass-stub design.
+function exportPassportPNG(){
+  const W = 760, PAD = 40, RED = 18;
+  const perfY1 = 168;          // perforation between the QR row and the field rows
+  const fieldsTop = perfY1 + 26;
+  const fieldRowH = 32;        // label + value, one field per row — no column math to overlap
+  const fieldCount = 4;        // Event, Stamps, Student ID, Passenger
+  const passengerExtraLines = Math.max(0, countWrapLines(document.createElement('canvas').getContext('2d'), (state.name||'').toUpperCase(), 240, '13px "Courier New", monospace') - 1);
+  const topH = fieldsTop + fieldCount*fieldRowH + passengerExtraLines*15 + 14;
+  const cols = 3, rows = Math.ceil(BOOTHS.length/cols);
+  const cellW = (W - PAD*2) / cols, cellH = 118;
+  const stubH = 86 + rows*cellH + 70;
+  const H = topH + stubH;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // page background behind the ticket (matches the site's paper colour)
+  ctx.fillStyle = '#0B0B0B'; ctx.fillRect(0,0,W,H);
+
+  // ---- the ticket card itself: one continuous white sheet, clipped to
+  // rounded corners, so the perforation between the two halves reads as a
+  // tear line in the same sheet rather than a seam between two cards ----
+  ctx.save();
+  rr(ctx, 0, 0, W, H, 18); ctx.clip();
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,W,H);
+
+  // red edge bars run the full height, continuous top to bottom
+  ctx.fillStyle = '#D7263D';
+  ctx.fillRect(0, 0, RED, H);
+  ctx.fillRect(W-RED, 0, RED, H);
+
+  // === TOP: boarding-pass badge ===
+  ctx.fillStyle = '#111';
+  ctx.textBaseline = 'alphabetic';
+  // kicker tag
+  ctx.font = '900 13px Archivo, sans-serif';
+  const kicker = 'EVENT PASS';
+  const kw = ctx.measureText(kicker).width;
+  ctx.fillStyle = '#111'; ctx.fillRect(W-RED-14-kw-16, 26, kw+16, 22);
+  ctx.fillStyle = '#fff'; ctx.fillText(kicker, W-RED-14-kw-8, 42);
+
+  // QR code, rendered to an offscreen canvas via the same QRCode lib the page uses
+  const qrBox = document.createElement('div');
+  new QRCode(qrBox, {text:'STUDENT:'+state.studentId, width:120, height:120, colorDark:'#000000', colorLight:'#ffffff'});
+  const qrEl = qrBox.querySelector('canvas') || qrBox.querySelector('img');
+  const qrX = RED+26, qrY = 26;
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 3;
+  ctx.strokeRect(qrX, qrY, 128, 128);
+  if(qrEl) ctx.drawImage(qrEl, qrX+4, qrY+4, 120, 120);
+
+  // small barcode + pass number under the kicker tag
+  drawBarcode(ctx, W-RED-14-150, 60, 150, 36, state.studentId||'');
+  ctx.fillStyle = '#111'; ctx.font = '13px "Courier New", monospace'; ctx.textAlign = 'right';
+  ctx.fillText((state.studentId||'').toUpperCase(), W-RED-14, 112);
+  ctx.textAlign = 'left';
+
+  // perforation between QR row and the field rows
+  drawPerforation(ctx, perfY1, RED, W);
+
+  // ITL tag, top-left of this row
+  const tagY = perfY1 + 20, tagH = 26, tagW = 50;
+  ctx.save();
+  ctx.fillStyle = '#111'; ctx.font = '900 14px Archivo, sans-serif';
+  ctx.fillRect(RED+26, tagY, tagW, tagH);
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+  ctx.fillText('ITL', RED+26+tagW/2, tagY+18);
+  ctx.restore();
+
+  // vertical "ITLYMPICS" wordmark, filling the space below the tag down to
+  // the bottom of this section — sized to fit (like the on-screen clamp()),
+  // so it can never run back up into the tag or up past the perforation.
+  const wmTop = tagY + tagH + 14, wmBottom = topH - 16;
+  const wmAvailable = Math.max(20, wmBottom - wmTop);
+  ctx.save();
+  let wmFont = 40;
+  ctx.font = `900 ${wmFont}px Archivo, sans-serif`;
+  while(wmFont > 16 && ctx.measureText('ITLYMPICS').width > wmAvailable){
+    wmFont -= 2; ctx.font = `900 ${wmFont}px Archivo, sans-serif`;
+  }
+  ctx.translate(RED+26+22, wmBottom);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillStyle = '#111'; ctx.textAlign = 'left';
+  ctx.fillText('ITLYMPICS', 0, 0);
+  ctx.restore();
+
+  // right column: Event / Stamps / Student ID / Passenger — stacked one per
+  // row (not a 2-up grid) so nothing can land on the same baseline twice.
+  const count = Object.keys(state.stamps).length;
+  const fx = W-RED-26;
+  ctx.textAlign = 'right';
+  let fy = fieldsTop;
+  const field = (label, value) => {
+    ctx.fillStyle = '#111'; ctx.font = '900 10px Archivo, sans-serif';
+    ctx.fillText(label.toUpperCase(), fx, fy);
+    ctx.font = '13px "Courier New", monospace';
+    fy += 18;
+    const lines = wrapText(ctx, String(value).toUpperCase(), fx, fy, 240, 15);
+    fy += 15*(lines-1) + (fieldRowH-16);
+  };
+  field('Event', 'ITL 2027');
+  field('Stamps', `${count}/${BOOTHS.length}`);
+  field('Student ID', state.studentId||'');
+  field('Passenger', state.name||'');
+  ctx.textAlign = 'left';
+
+  // === PERFORATION between pass and stub (the actual tear line) ===
+  drawPerforation(ctx, topH, RED, W);
+
+  // === BOTTOM: ticket stub — booth stamps, same red-bar framing ===
+  ctx.fillStyle = '#111'; ctx.font = '900 12px Archivo, sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('STUB · BOOTH STAMPS', RED+26, topH+34);
+  drawBarcode(ctx, W-RED-26-130, topH+16, 130, 26, 'stub-'+(state.studentId||''));
+
+  const gridTop = topH + 60;
   BOOTHS.forEach((b,i)=>{
     const col=i%cols, row=Math.floor(i/cols);
-    const x = pad+col*cellW, y = headerH+row*cellH;
-    const filled = !!state.stamps[b.id];
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = filled ? '#C9791F' : '#D7DBD8';
-    ctx.strokeRect(x+6, y+6, cellW-16, cellH-16);
-    ctx.fillStyle = filled ? '#1F3A5F' : '#6b6f6d';
-    ctx.font = '13px sans-serif';
-    wrapText(ctx, b.name, x+cellW/2, y+30, cellW-30, 16);
+    const x = RED+16 + col*cellW, y = gridTop + row*cellH;
+    const cw = cellW-14, ch = cellH-14;
+    const stamp = state.stamps[b.id];
+    const filled = !!stamp;
+    ctx.save();
+    ctx.setLineDash(filled ? [] : [5,4]);
+    ctx.lineWidth = filled ? 2.5 : 2;
+    ctx.strokeStyle = filled ? '#111' : '#ddd';
+    rr(ctx, x+7, y+7, cw, ch, 8); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = filled ? '#111' : '#888';
+    ctx.font = '700 11px Archivo, sans-serif'; ctx.textAlign = 'center';
+    wrapText(ctx, b.name.toUpperCase(), x+7+cw/2, y+30, cw-16, 14);
     if(filled){
       ctx.save();
-      ctx.translate(x+cellW/2, y+72); ctx.rotate(-0.14);
-      ctx.strokeStyle = '#C9791F'; ctx.lineWidth = 2;
-      ctx.strokeRect(-42,-15,84,30);
-      ctx.fillStyle = '#C9791F'; ctx.font = '700 14px monospace';
-      ctx.textAlign='center'; ctx.textBaseline='middle';
-      ctx.fillText('STAMPED', 0, 0);
+      ctx.translate(x+7+cw/2, y+7+ch/2+16); ctx.rotate(-0.14);
+      ctx.strokeStyle = '#D7263D'; ctx.lineWidth = 2.5;
+      ctx.strokeRect(-38,-13,76,26);
+      ctx.fillStyle = '#D7263D'; ctx.font = '900 12px "Courier New", monospace';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('STAMPED', 0, 1);
       ctx.restore();
-      ctx.fillStyle = '#6b6f6d'; ctx.font = '10px monospace'; ctx.textAlign='center';
-      ctx.fillText(new Date(state.stamps[b.id].scannedAt).toLocaleString(), x+cellW/2, y+cellH-16);
+      ctx.textBaseline = 'alphabetic';
     }
+    ctx.textAlign = 'left';
   });
-  ctx.fillStyle = '#6b6f6d'; ctx.font = '10px sans-serif'; ctx.textAlign='left';
-  ctx.fillText(`Exported ${new Date().toLocaleString()}`, pad, canvas.height-10);
+
+  ctx.fillStyle = '#888'; ctx.font = '10px "Courier New", monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`EXPORTED ${new Date().toLocaleString().toUpperCase()}`, W/2, H-20);
+  ctx.textAlign = 'left';
+
+  ctx.restore(); // end clip
 
   canvas.toBlob(blob=>{
     const url = URL.createObjectURL(blob);
@@ -405,6 +567,19 @@ function exportPassportPNG(){
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   });
+}
+// Dashed tear-line across the ticket at height y, with a half-circle notch
+// bitten out of each red edge bar — mirrors the .pass-perf CSS.
+function drawPerforation(ctx, y, red, W){
+  ctx.save();
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 2.5; ctx.setLineDash([8,6]);
+  ctx.beginPath(); ctx.moveTo(red, y); ctx.lineTo(W-red, y); ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath(); ctx.arc(0, y, 16, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(W, y, 16, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
 }
 
 // ---- handling a scanned code ----
