@@ -20,11 +20,6 @@
 <script src="vendor/jsQR.js"></script>
 <script src="vendor/qrcode.min.js"></script>
 <script src="vendor/supabase.js"></script>
-<!-- Used only by the "Export as PNG" button: captures the real .pass /
-     .pass-stub DOM nodes to a canvas, so the exported image is always a
-     pixel-faithful copy of what's on screen instead of a second,
-     hand-maintained drawing that can drift out of sync with it. -->
-<script src="vendor/html2canvas.min.js"></script>
 <style>
   /* Stamp grid: each booth is a little ticket stub */
   .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
@@ -153,7 +148,7 @@
         <p class="progress" id="progressLabel"></p>
       </div>
       <div class="pass-stub-foot">
-        <button class="btn-primary" onclick="exportPassportPNG(this)">Export passport as PNG (front &amp; back)</button>
+        <button class="btn-primary" onclick="exportPassportPNG()">Export passport as PNG (front &amp; back)</button>
       </div>
     </section>
 
@@ -360,138 +355,269 @@ function toggleNet(){
   if(state.online) maybeSync(); else showToast('Venue wifi off — stamps keep working locally');
 }
 
-// html2canvas doesn't support a couple of CSS tricks .pass/.pass-stub rely
-// on — confirmed by rendering the real export and comparing it to the live
-// page:
-//   1. writing-mode:vertical-rl (the "ITLYMPICS" wordmark) comes out
-//      mirrored/garbled — html2canvas has no writing-mode support.
-//   2. two layered `inset` box-shadows (the thin red side bars) rasterize
-//      as a solid fill instead of thin bars — html2canvas's inset
-//      box-shadow handling doesn't match real browsers here.
-// Both are rewritten using only plain positioned elements/transforms that
-// html2canvas renders correctly. This runs on html2canvas's *cloned*
-// document (its `onclone` hook) — the live page's CSS, which already
-// renders both of these correctly in every real browser, is never touched.
-function patchCloneForExport(clonedDoc){
-  const cityOrig = document.querySelector('.pass-city');
-  const cityClone = clonedDoc.querySelector('.pass-city');
-  if(cityOrig && cityClone){
-    const rect = cityOrig.getBoundingClientRect();   // preserve the exact footprint the real layout gave it
-    const cs = getComputedStyle(cityOrig);
-    cityClone.style.writingMode = 'horizontal-tb';
-    cityClone.style.transform = 'none';
-    cityClone.style.width = rect.width + 'px';
-    cityClone.style.height = rect.height + 'px';
-    cityClone.style.position = 'relative';
-    cityClone.style.lineHeight = 'normal';
-    const text = cityClone.textContent;
-    cityClone.textContent = '';
-    const inner = clonedDoc.createElement('span');
-    inner.textContent = text;
-    inner.style.cssText =
-      'position:absolute;left:50%;top:50%;white-space:nowrap;'+
-      'transform:translate(-50%,-50%) rotate(-90deg);transform-origin:center center;'+
-      'font-size:'+cs.fontSize+';font-weight:'+cs.fontWeight+';'+
-      'letter-spacing:'+cs.letterSpacing+';text-transform:'+cs.textTransform+';'+
-      'font-family:'+cs.fontFamily+';color:'+cs.color+';';
-    cityClone.appendChild(inner);
-  }
-  ['.pass-body', '.pass-stub-body'].forEach(sel=>{
-    const el = clonedDoc.querySelector(sel);
-    if(!el) return;
-    el.style.boxShadow = 'none';
-    if(getComputedStyle(el).position === 'static') el.style.position = 'relative';
-    ['left','right'].forEach(side=>{
-      const bar = clonedDoc.createElement('div');
-      bar.style.cssText = 'position:absolute;top:0;bottom:0;'+side+':0;width:10px;background:#D7263D;pointer-events:none;';
-      el.appendChild(bar);
-    });
+// Wraps text to maxWidth at the ctx's current font/alignment and draws it.
+// Returns the number of lines drawn, so callers can reserve the right
+// amount of vertical space instead of guessing (that gap is what let the
+// Passenger name overlap the row below it before).
+function wrapText(ctx, text, x, y, maxWidth, lineHeight){
+  const words = text.split(' ');
+  let line='', lines=[];
+  words.forEach(w=>{
+    const test = line+w+' ';
+    if(ctx.measureText(test).width > maxWidth && line){ lines.push(line); line = w+' '; }
+    else line = test;
   });
+  lines.push(line);
+  lines.forEach((l,i)=>ctx.fillText(l.trim(), x, y+i*lineHeight));
+  return lines.length;
+}
+// Same wrapping math as wrapText but without drawing — used to measure how
+// tall a field will be (e.g. a long name) before laying out the rows above it.
+function countWrapLines(ctx, text, maxWidth, font){
+  ctx.font = font;
+  const words = text.split(' ');
+  let line='', lines=0;
+  words.forEach(w=>{
+    const test = line+w+' ';
+    if(ctx.measureText(test).width > maxWidth && line){ lines++; line = w+' '; }
+    else line = test;
+  });
+  return lines+1;
 }
 
-// Downloads a single <a download> click for a blob.
-function downloadBlob(blob, filename){
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); a.remove();
-  URL.revokeObjectURL(url);
-}
-
-// Exports the Passport as two PNGs — front (the .pass boarding-pass card)
-// and back (the .pass-stub booth-stamp card) — same W×H for both, so they
-// genuinely read as the two sides of one physical ticket rather than two
-// differently-shaped screenshots.
-//
-// This renders the REAL on-screen .pass / .pass-stub elements (via
-// html2canvas, vendored in ./vendor/ same as jsQR/qrcode.js — see the
-// comment above those <script> tags) rather than redrawing them stroke-by-
-// stroke on a <canvas>. A hand-redrawn copy is exactly what drifted out of
-// sync with the live design before — every CSS tweak to .pass would need a
-// matching tweak here, and in practice it didn't happen, which is why the
-// last export looked noticeably different from the on-screen card. Capturing
-// the live DOM means the export is always pixel-faithful to whatever the
-// page actually looks like, including future style changes, for free.
-async function exportPassportPNG(btn){
-  const label = btn ? btn.textContent : null;
-  if(btn){ btn.disabled = true; btn.textContent = 'Exporting…'; }
-  try{
-    const front = document.querySelector('.pass:not(.pass-stub)');
-    const back = document.querySelector('.pass-stub');
-    if(!front || !back) throw new Error('Pass elements not found on page');
-
-    // Both cards are captured at a fixed CSS width (420px) regardless of the
-    // viewport, so "front" and "back" always come out the exact same pixel
-    // size no matter how wide the window is when you hit Export — this is
-    // what makes them line up as two sides of one card instead of two
-    // different sizes.
-    const opts = {
-      backgroundColor: '#ffffff',
-      scale: 3,                 // print-quality (~1260px wide at 420 CSS px)
-      useCORS: true,
-      width: 420,
-      windowWidth: 420,
-      onclone: patchCloneForExport,
-    };
-    const [frontCanvas, backCanvas] = await Promise.all([
-      html2canvas(front, opts),
-      html2canvas(back, opts),
-    ]);
-
-    // Normalize both to the taller of the two heights so front.png and
-    // back.png are IDENTICAL dimensions even if one card's content (e.g. a
-    // long name wrapping, or 6 stamps vs. 2) made it a bit taller on screen.
-    const w = Math.max(frontCanvas.width, backCanvas.width);
-    const h = Math.max(frontCanvas.height, backCanvas.height);
-    const pad = (c) => {
-      if(c.width === w && c.height === h) return c;
-      const out = document.createElement('canvas');
-      out.width = w; out.height = h;
-      const octx = out.getContext('2d');
-      octx.fillStyle = '#ffffff'; octx.fillRect(0, 0, w, h);
-      octx.drawImage(c, 0, 0);
-      return out;
-    };
-    const finalFront = pad(frontCanvas), finalBack = pad(backCanvas);
-
-    const toBlob = (c) => new Promise((resolve, reject) =>
-      c.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/png'));
-    const [frontBlob, backBlob] = await Promise.all([toBlob(finalFront), toBlob(finalBack)]);
-
-    const id = state.studentId || 'passport';
-    downloadBlob(frontBlob, `itlympics-passport-${id}-front.png`);
-    // Stagger the second download slightly — back-to-back <a>.click() calls
-    // for two downloads are dropped by some browsers (notably Safari) if
-    // fired in the same tick.
-    setTimeout(() => downloadBlob(backBlob, `itlympics-passport-${id}-back.png`), 250);
-
-    showToast('Exported front.png and back.png');
-  }catch(e){
-    console.error('exportPassportPNG failed', e);
-    showToast('Export failed: '+e.message, true);
-  }finally{
-    if(btn){ btn.disabled = false; btn.textContent = label; }
+// ---- barcode (decorative, same look as the CSS .barcode) ----
+// Deterministic from a seed string so the same ID always draws the same
+// pattern, rather than looking random/different every export.
+function drawBarcode(ctx, x, y, w, h, seed){
+  let s = 0; for(let i=0;i<seed.length;i++) s = (s*31 + seed.charCodeAt(i)) >>> 0;
+  const rand = () => { s = (s*1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  ctx.save(); ctx.fillStyle = '#111';
+  let cx = x;
+  while(cx < x+w){
+    const bw = 2 + Math.floor(rand()*5);
+    if(rand() > 0.42) ctx.fillRect(cx, y, bw, h);
+    cx += bw + 1;
   }
+  ctx.restore();
+}
+// Rounded-rect helper (roundRect isn't on every supported canvas yet).
+function rr(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
+}
+// Dashed tear-line across the ticket at height y, with a half-circle notch
+// bitten out of each red edge bar — mirrors the .pass-perf CSS.
+function drawPerforation(ctx, y, red, W){
+  ctx.save();
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 2.5; ctx.setLineDash([8,6]);
+  ctx.beginPath(); ctx.moveTo(red, y); ctx.lineTo(W-red, y); ctx.stroke();
+  ctx.restore();
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.beginPath(); ctx.arc(0, y, 16, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(W, y, 16, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+}
+
+// Draws one ticket half (either the front boarding-pass badge, or the back
+// stub) onto its own canvas at a fixed W×H, so front and back always come
+// out the exact same pixel size — genuinely two sides of one physical
+// ticket rather than two differently-sized screenshots. Hand-drawn with
+// Canvas primitives (not a DOM screenshot) because html2canvas doesn't
+// support two things this design relies on: writing-mode:vertical-rl (the
+// "ITLYMPICS" wordmark came out mirrored/garbled) and layered inset
+// box-shadows (the red side bars rasterized as a solid fill). Drawing it
+// directly avoids both.
+function drawFrontCanvas(W, H, RED){
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = '#D7263D';
+  ctx.fillRect(0, 0, RED, H);
+  ctx.fillRect(W-RED, 0, RED, H);
+
+  const perfY1 = 168;
+  const fieldsTop = perfY1 + 26;
+  const fieldRowH = 32;
+  const topH = H;
+
+  ctx.fillStyle = '#111';
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = '900 13px Archivo, sans-serif';
+  const kicker = 'EVENT PASS';
+  const kw = ctx.measureText(kicker).width;
+  ctx.fillStyle = '#111'; ctx.fillRect(W-RED-14-kw-16, 26, kw+16, 22);
+  ctx.fillStyle = '#fff'; ctx.fillText(kicker, W-RED-14-kw-8, 42);
+
+  const qrBox = document.createElement('div');
+  new QRCode(qrBox, {text:'STUDENT:'+state.studentId, width:120, height:120, colorDark:'#000000', colorLight:'#ffffff'});
+  const qrEl = qrBox.querySelector('canvas') || qrBox.querySelector('img');
+  const qrX = RED+26, qrY = 26;
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 3;
+  ctx.strokeRect(qrX, qrY, 128, 128);
+  if(qrEl) ctx.drawImage(qrEl, qrX+4, qrY+4, 120, 120);
+
+  drawBarcode(ctx, W-RED-14-150, 60, 150, 36, state.studentId||'');
+  ctx.fillStyle = '#111'; ctx.font = '13px "Courier New", monospace'; ctx.textAlign = 'right';
+  ctx.fillText((state.studentId||'').toUpperCase(), W-RED-14, 112);
+  ctx.textAlign = 'left';
+
+  drawPerforation(ctx, perfY1, RED, W);
+
+  const tagY = perfY1 + 20, tagH = 26, tagW = 50;
+  ctx.save();
+  ctx.fillStyle = '#111'; ctx.font = '900 14px Archivo, sans-serif';
+  ctx.fillRect(RED+26, tagY, tagW, tagH);
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+  ctx.fillText('ITL', RED+26+tagW/2, tagY+18);
+  ctx.restore();
+
+  // vertical "ITLYMPICS" wordmark, sized to fit the space below the tag
+  // down to the bottom of the card — can never run back into the tag or
+  // past the perforation.
+  const wmTop = tagY + tagH + 14, wmBottom = topH - 16;
+  const wmAvailable = Math.max(20, wmBottom - wmTop);
+  ctx.save();
+  let wmFont = 40;
+  ctx.font = `900 ${wmFont}px Archivo, sans-serif`;
+  while(wmFont > 16 && ctx.measureText('ITLYMPICS').width > wmAvailable){
+    wmFont -= 2; ctx.font = `900 ${wmFont}px Archivo, sans-serif`;
+  }
+  ctx.translate(RED+26+22, wmBottom);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillStyle = '#111'; ctx.textAlign = 'left';
+  ctx.fillText('ITLYMPICS', 0, 0);
+  ctx.restore();
+
+  // right column: Event / Stamps / Student ID / Passenger — stacked one
+  // field per row so nothing can land on the same baseline twice.
+  const count = Object.keys(state.stamps).length;
+  const fx = W-RED-26;
+  ctx.textAlign = 'right';
+  let fy = fieldsTop;
+  const field = (label, value) => {
+    ctx.fillStyle = '#111'; ctx.font = '900 10px Archivo, sans-serif';
+    ctx.fillText(label.toUpperCase(), fx, fy);
+    ctx.font = '13px "Courier New", monospace';
+    fy += 18;
+    const lines = wrapText(ctx, String(value).toUpperCase(), fx, fy, 240, 15);
+    fy += 15*(lines-1) + (fieldRowH-16);
+  };
+  field('Event', 'ITL 2027');
+  field('Stamps', `${count}/${BOOTHS.length}`);
+  field('Student ID', state.studentId||'');
+  field('Passenger', state.name||'');
+  ctx.textAlign = 'left';
+
+  return canvas;
+}
+function drawBackCanvas(W, H, RED){
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0,0,W,H);
+  ctx.fillStyle = '#D7263D';
+  ctx.fillRect(0, 0, RED, H);
+  ctx.fillRect(W-RED, 0, RED, H);
+
+  const PAD = 40;
+  const cols = 3, rows = Math.ceil(BOOTHS.length/cols);
+  const cellW = (W - PAD*2) / cols, cellH = 118;
+
+  ctx.fillStyle = '#111'; ctx.font = '900 12px Archivo, sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('STUB · BOOTH STAMPS', RED+26, 34);
+  drawBarcode(ctx, W-RED-26-130, 16, 130, 26, 'stub-'+(state.studentId||''));
+  drawPerforation(ctx, 50, RED, W);
+
+  const gridTop = 76;
+  BOOTHS.forEach((b,i)=>{
+    const col=i%cols, row=Math.floor(i/cols);
+    const x = RED+16 + col*cellW, y = gridTop + row*cellH;
+    const cw = cellW-14, ch = cellH-14;
+    const stamp = state.stamps[b.id];
+    const filled = !!stamp;
+    ctx.save();
+    ctx.setLineDash(filled ? [] : [5,4]);
+    ctx.lineWidth = filled ? 2.5 : 2;
+    ctx.strokeStyle = filled ? '#111' : '#ddd';
+    rr(ctx, x+7, y+7, cw, ch, 8); ctx.stroke();
+    ctx.restore();
+    ctx.fillStyle = filled ? '#111' : '#888';
+    ctx.font = '700 11px Archivo, sans-serif'; ctx.textAlign = 'center';
+    wrapText(ctx, b.name.toUpperCase(), x+7+cw/2, y+30, cw-16, 14);
+    if(filled){
+      ctx.save();
+      ctx.translate(x+7+cw/2, y+7+ch/2+16); ctx.rotate(-0.14);
+      ctx.strokeStyle = '#D7263D'; ctx.lineWidth = 2.5;
+      ctx.strokeRect(-38,-13,76,26);
+      ctx.fillStyle = '#D7263D'; ctx.font = '900 12px "Courier New", monospace';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('STAMPED', 0, 1);
+      ctx.restore();
+      ctx.textBaseline = 'alphabetic';
+    }
+    ctx.textAlign = 'left';
+  });
+
+  const count = Object.keys(state.stamps).length;
+  ctx.fillStyle = '#111'; ctx.font = '700 11px Archivo, sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(`${count} OF ${BOOTHS.length} BOOTHS STAMPED`, RED+26, gridTop + rows*cellH + 22);
+
+  ctx.fillStyle = '#888'; ctx.font = '10px "Courier New", monospace'; ctx.textAlign = 'center';
+  ctx.fillText(`EXPORTED ${new Date().toLocaleString().toUpperCase()}`, W/2, H-20);
+  ctx.textAlign = 'left';
+
+  return canvas;
+}
+
+// Exports the Passport as two PNGs — front (the boarding-pass badge: QR,
+// Student ID, passenger) and back (the perforated stub listing every booth
+// stamp) — matching the on-screen .pass / .pass-stub design, both at the
+// SAME fixed W×H so they read as the two sides of one physical ticket
+// rather than two differently-sized images.
+function exportPassportPNG(){
+  const W = 760, RED = 18;
+  const cols = 3, rows = Math.ceil(BOOTHS.length/cols);
+  const cellH = 118;
+
+  // Measure how tall each side NEEDS to be, then use the taller of the two
+  // for both canvases — this is what keeps front.png and back.png identical
+  // in size even when a long passenger name wraps, or there are few/many
+  // stamps.
+  const measureCtx = document.createElement('canvas').getContext('2d');
+  const perfY1 = 168, fieldsTop = perfY1 + 26, fieldRowH = 32, fieldCount = 4;
+  const passengerExtraLines = Math.max(0, countWrapLines(measureCtx, (state.name||'').toUpperCase(), 240, '13px "Courier New", monospace') - 1);
+  const frontH = fieldsTop + fieldCount*fieldRowH + passengerExtraLines*15 + 14;
+  const backH = 76 + rows*cellH + 70;
+  const H = Math.max(frontH, backH);
+
+  const frontCanvas = drawFrontCanvas(W, H, RED);
+  const backCanvas = drawBackCanvas(W, H, RED);
+
+  const id = state.studentId || 'passport';
+  frontCanvas.toBlob(blob=>{
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `itlympics-passport-${id}-front.png`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  });
+  // Stagger the second download slightly — back-to-back <a>.click() calls
+  // for two downloads are dropped by some browsers (notably Safari) if
+  // fired in the same tick.
+  setTimeout(() => {
+    backCanvas.toBlob(blob=>{
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `itlympics-passport-${id}-back.png`;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    });
+  }, 250);
+
+  showToast('Exported front.png and back.png');
 }
 
 // ---- handling a scanned code ----
